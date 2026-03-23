@@ -1,0 +1,506 @@
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { LandingPage } from './pages/LandingPage';
+import { CognitoLoginPage } from './pages/CognitoLoginPage';
+import { CognitoSignUpPage } from './pages/CognitoSignUpPage';
+import { CognitoConfirmSignUpPage } from './pages/CognitoConfirmSignUpPage';
+import { CognitoForgotPasswordPage } from './pages/CognitoForgotPasswordPage';
+import { DashboardPage } from './pages/DashboardPage';
+import { ApiDocsPage } from './pages/ApiDocsPage';
+import { AuditLogsPage } from './pages/AuditLogsPage';
+import { HowItWorksPage } from './pages/HowItWorksPage';
+import { TopicManagerPage } from './pages/TopicManagerPage';
+import { CalendarPage } from './pages/CalendarPage';
+import { AnalyticsPage } from './pages/AnalyticsPage';
+import { SiteMonitoringPage } from './pages/SiteMonitoringPage';
+import EmailsPage from './pages/EmailsPage';
+import PaymentsDashboardPage from './pages/PaymentsDashboardPage';
+import OrdersHealthDashboardPage from './pages/OrdersHealthDashboardPage';
+import OrderTrackingPage from './pages/OrderTrackingPage';
+import InventoryHealthPage from './pages/InventoryHealthPage';
+import { Sidebar } from './components/layout/Sidebar';
+import IntegrationPage from './pages/IntegrationPage';
+import { SettingsModal } from './components/layout/SettingsModal';
+import { NotificationToast } from './components/ui/NotificationToast';
+import { Theme, type Notification, SystemStatusData, NotificationUpdatePayload, Topic, MonitoredSite, User, Comment } from './types';
+import { OneSignalService } from './lib/oneSignalService';
+import { ThemeContext } from './contexts/ThemeContext';
+import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
+import { SiteDetailPage } from './pages/monitoring/SiteDetailPage';
+import UserManagementPage from './pages/UserManagementPage';
+import SyntheticMonitoringPage from './pages/monitoring/SyntheticMonitoringPage';
+import ErrorBoundary from './components/ui/ErrorBoundary';
+import { getCurrentUser, userPool } from './lib/cognitoClient';
+import { CognitoUserSession } from 'amazon-cognito-identity-js';
+import { getNotifications, getTopics, getSites, addComment as apiAddComment, updateNotification as apiUpdateNotification, addTopic as apiAddTopic, deleteTopic as apiDeleteTopic, toggleTopicSubscription as apiToggleTopicSubscription } from './lib/api';
+
+interface ExtendedNotification extends Notification {
+  oneSignalId?: string;
+}
+
+function App() {
+  const [theme, setTheme] = useState<Theme>('light');
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [soundEnabled, setSoundEnabled] = useState(true);
+  const [snoozedUntil, setSnoozedUntil] = useState<Date | null>(null);
+  const [isPushEnabled, setIsPushEnabled] = useState(false);
+  const [isPushLoading, setIsPushLoading] = useState(false);
+  const [notifications, setNotifications] = useState<ExtendedNotification[]>([]);
+  const [topics, setTopics] = useState<Topic[]>([]);
+  const [toasts, setToasts] = useState<ExtendedNotification[]>([]);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [dataLoading, setDataLoading] = useState(true);
+  const [sites, setSites] = useState<MonitoredSite[]>([]);
+  const [loadingSites, setLoadingSites] = useState(true);
+  const [sitesError, setSitesError] = useState<string | null>(null);
+  const [profile, setProfile] = useState<User | null>(null);
+  const [profileLoading, setProfileLoading] = useState(true);
+  const [profileError, setProfileError] = useState<string | null>(null);
+  const navigate = useNavigate();
+  const location = useLocation();
+  const oneSignalService = OneSignalService.getInstance();
+  const oneSignalInitialized = useRef(false);
+  const dataFetched = useRef(false);
+
+  const currentPage = useMemo(() => {
+    const path = location.pathname;
+    if (path.startsWith('/site-monitoring') || path.startsWith('/monitoring')) return 'site-monitoring';
+    if (path.startsWith('/api-docs')) return 'api-docs';
+    if (path.startsWith('/emails')) return 'emails';
+    if (path.startsWith('/audit-logs')) return 'audit-logs';
+    if (path.startsWith('/how-it-works')) return 'how-it-works';
+    if (path.startsWith('/calendar')) return 'calendar';
+    if (path.startsWith('/analytics')) return 'analytics';
+    if (path.startsWith('/topic-manager')) return 'topic-manager';
+    if (path.startsWith('/integrations')) return 'integrations';
+    if (path.startsWith('/user-management')) return 'user-management';
+    return 'dashboard';
+  }, [location.pathname]);
+
+  const addToast = useCallback((notification: ExtendedNotification) => {
+    setToasts(prev => [{ ...notification, id: `toast-${notification.id}-${Date.now()}` }, ...prev]);
+  }, []);
+
+  const removeToast = useCallback((id: string) => {
+    setToasts(prev => prev.filter(t => t.id !== id));
+  }, []);
+
+  const systemStatus: SystemStatusData = useMemo(() => ({
+    status: 'operational',
+    message: 'All systems normal',
+    last_updated: new Date().toISOString(),
+    service: 'Ready',
+    database: 'Connected',
+    push: 'OneSignal',
+    subscription: isPushEnabled ? 'Active' : 'Inactive',
+  }), [isPushEnabled]);
+
+  const handleNewNotification = useCallback((notification: ExtendedNotification) => {
+      console.log('🔔 Handling new notification:', notification.title);
+      setNotifications(prev => [notification, ...prev]);
+      addToast(notification);
+  
+      if (soundEnabled) {
+        try {
+          const audio = new Audio('/alert.wav');
+          audio.play().catch(e => console.error("Audio play failed:", e));
+        } catch (error: any) {
+          console.error("Error playing sound:", error);
+        }
+      }
+    }, [soundEnabled, addToast]);
+
+  useEffect(() => {
+    const checkSession = async () => {
+      setAuthLoading(true);
+      try {
+        const userSession: CognitoUserSession | null = await getCurrentUser();
+        if (userSession) {
+            const idToken = userSession.getIdToken().getJwtToken();
+            const payload = JSON.parse(atob(idToken.split('.')[1]));
+            setProfile({
+                id: payload.sub, // Use 'sub' for unique user ID
+                full_name: payload.name,
+                email: payload.email,
+                avatar_url: payload.picture,
+            });
+        }
+      } catch (error: any) {
+        console.error("Error checking session:", error);
+      } finally {
+        setAuthLoading(false);
+      }
+    };
+
+    checkSession();
+  }, []);
+  
+  const handleLoginSuccess = async () => {
+      setAuthLoading(true);
+      try {
+        const userSession: CognitoUserSession | null = await getCurrentUser();
+         if (userSession) {
+            const idToken = userSession.getIdToken().getJwtToken();
+            const payload = JSON.parse(atob(idToken.split('.')[1]));
+            setProfile({
+                id: payload.sub,
+                full_name: payload.name,
+                email: payload.email,
+                avatar_url: payload.picture,
+            });
+        }
+        navigate('/');
+      } catch (error: any) {
+        console.error("Error fetching session after login:", error);
+      } finally {
+        setAuthLoading(false);
+      }
+  };
+
+  useEffect(() => {
+    if (profile && !dataFetched.current) {
+      const fetchInitialData = async () => {
+        setDataLoading(true);
+        setProfileLoading(true);
+        try {
+          console.log('📊 Fetching initial data...');
+          const [notificationsData, topicsData, sitesData] = await Promise.all([
+            getNotifications(),
+            getTopics(),
+            getSites()
+          ]);
+          
+          setNotifications(notificationsData || []);
+          setTopics(topicsData || []);
+          setSites(sitesData || []);
+          console.log('✅ Initial data fetched successfully');
+          dataFetched.current = true;
+        } catch (error: any) {
+          console.error('❌ Error fetching initial data:', error);
+          setProfileError('Failed to load dashboard data. Please try again later.');
+        } finally {
+          setDataLoading(false);
+          setProfileLoading(false);
+          setLoadingSites(false);
+        }
+      };
+
+      fetchInitialData();
+    }
+  }, [profile]);
+
+  useEffect(() => {
+    if (!profile || oneSignalInitialized.current) {
+      return;
+    }
+    oneSignalInitialized.current = true;
+
+    const initOneSignal = async () => {
+      try {
+        console.log('🔔 Initializing OneSignal...');
+        await oneSignalService.initialize();
+        console.log(`🔔 Logging into OneSignal with external user ID: ${profile.id}`);
+        await oneSignalService.login(profile.id);
+
+        const isSubscribed = await oneSignalService.isSubscribed();
+        setIsPushEnabled(isSubscribed);
+
+        oneSignalService.onSubscriptionChange((subscribed: boolean) => {
+          setIsPushEnabled(subscribed);
+        });
+
+        oneSignalService.setupForegroundNotifications((notification: any) => {
+            console.log('📱 Foreground notification received from OneSignal:', notification);
+            const formattedNotification: ExtendedNotification = {
+              ...notification.additionalData,
+              id: notification.notificationId,
+              title: notification.title,
+              message: notification.body,
+            };
+            handleNewNotification(formattedNotification);
+       });
+
+        console.log('✅ OneSignal initialized.');
+      } catch (error: any) {
+        console.error('❌ Failed to initialize OneSignal:', error);
+        oneSignalInitialized.current = false; // Allow retry
+      }
+    };
+
+    initOneSignal();
+  }, [profile, oneSignalService, handleNewNotification]);
+  
+  useEffect(() => {
+    if (theme === 'dark') {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+  }, [theme]);
+
+  const handleSignUpSuccess = useCallback(() => {
+    navigate('/login');
+  }, [navigate]);
+
+  const toggleTheme = useCallback(() => {
+    setTheme(prevTheme => (prevTheme === 'light' ? 'dark' : 'light'));
+  }, []);
+
+  const handleLogout = useCallback(async () => {
+    console.log('➡️ Starting logout process...');
+    try {
+      await oneSignalService.logout();
+      console.log('🔔 Logged out from OneSignal');
+      const cognitoUser = userPool.getCurrentUser();
+      if (cognitoUser) {
+        cognitoUser.signOut();
+      }
+    } catch (error: any) {
+       console.error('❌ Error during logout process:', error);
+       const cognitoUser = userPool.getCurrentUser();
+       if (cognitoUser) {
+         cognitoUser.signOut();
+       }
+    } finally {
+        setProfile(null);
+        dataFetched.current = false;
+        oneSignalInitialized.current = false;
+        setNotifications([]);
+        setTopics([]);
+        setSites([]);
+        setToasts([]);
+        setIsPushEnabled(false);
+        navigate('/');
+        console.log('➡️ Client-side logout complete');
+    }
+  }, [navigate, oneSignalService]);
+
+  const handleNavigate = useCallback((page: string) => {
+    if (profile) {
+      navigate(`/${page}`);
+    }
+    setIsSidebarOpen(false);
+  }, [profile, navigate]);
+  
+  const sendTestAlert = useCallback(async () => {
+    alert('Sending test alerts is not implemented in this version.');
+  }, []);
+
+  const addComment = useCallback(async (notificationId: string, text: string) => {
+    if (!profile) return;
+
+    try {
+        const newComment = await apiAddComment(notificationId, { text });
+        setNotifications(prev => 
+            prev.map(n => 
+                n.id === notificationId 
+                ? { ...n, comments: [...(n.comments || []), newComment] as Comment[] } 
+                : n
+            )
+        );
+    } catch (error: any) {
+        console.error("❌ Error adding comment:", error);
+        alert('Failed to add comment. Please try again.');
+    }
+  }, [profile]);
+
+  const updateNotification = useCallback(async (notificationId: string, updates: NotificationUpdatePayload) => {
+    const originalNotifications = notifications;
+    setNotifications(prev => prev.map(n => n.id === notificationId ? { ...n, ...updates } : n));
+
+    try {
+      await apiUpdateNotification(notificationId, updates);
+    } catch (error: any) {
+      console.error("❌ Database update failed, reverting:", error);
+      setNotifications(originalNotifications);
+      alert('Failed to update notification.');
+    }
+  }, [notifications]);
+  
+  const handleAddTopic = useCallback(async (name: string, description: string) => {
+    try {
+      const newTopic = await apiAddTopic({ name, description });
+      setTopics(prev => [...prev, { ...newTopic, subscribed: false }]);
+    } catch (error: any) {
+      console.error("Error adding topic:", error);
+      alert(`Failed to add topic: ${(error as Error).message}`);
+    }
+  }, []);
+
+  const handleToggleSubscription = useCallback(async (topic: Topic) => {
+    setTopics(prev => prev.map(t => t.id === topic.id ? { ...t, subscribed: !t.subscribed } : t));
+    try {
+      await apiToggleTopicSubscription(topic.id);
+      if (isPushEnabled) {
+        if (topic.subscribed) {
+          oneSignalService.removeUserTags([`topic_${topic.id}`]);
+        } else {
+          oneSignalService.setUserTags({ [`topic_${topic.id}`]: '1' });
+        }
+      }
+    } catch (error: any) {
+      console.error('Error toggling subscription:', error);
+      alert('Failed to update subscription. Please try again.');
+      setTopics(prev => prev.map(t => t.id === topic.id ? { ...t, subscribed: !t.subscribed } : t));
+    }
+  }, [isPushEnabled, oneSignalService]);
+
+  const handleDeleteTopic = useCallback(async (topic: Topic) => {
+    const originalTopics = topics;
+    setTopics(prev => prev.filter(t => t.id !== topic.id));
+    try {
+      await apiDeleteTopic(topic.id);
+    } catch (error: any) {
+      console.error("Error deleting topic:", error);
+      alert(`Failed to delete topic: ${(error as Error).message}`);
+      setTopics(originalTopics);
+    }
+  }, [topics]);
+  
+  const handleClearLogs = useCallback(async () => {
+    alert('Clearing logs is not implemented in this version.');
+  }, []);
+
+ const subscribeToPush = useCallback(async () => {
+    alert('Push subscriptions are not fully implemented in this version.');
+  }, []);
+
+  const unsubscribeFromPush = useCallback(async () => {
+    alert('Push subscriptions are not fully implemented in this version.');
+  }, []);
+
+  const themeContextValue = useMemo(() => ({ theme, toggleTheme }), [theme, toggleTheme]);
+
+  if (authLoading) {
+    return (
+      <ThemeContext.Provider value={themeContextValue}>
+        <div className="min-h-screen flex items-center justify-center bg-background">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+        </div>
+      </ThemeContext.Provider>
+    );
+  }
+
+  if (!profile) {
+    return (
+      <ThemeContext.Provider value={themeContextValue}>
+        <Routes>
+          <Route path="/" element={<LandingPage />} />
+          <Route path="/login" element={<CognitoLoginPage onLoginSuccess={handleLoginSuccess} />} />
+          <Route path="/signup" element={<CognitoSignUpPage />} />
+          <Route path="/confirm-signup" element={<CognitoConfirmSignUpPage onSignUpSuccess={handleSignUpSuccess} />} />
+          <Route path="/forgot-password" element={<CognitoForgotPasswordPage />} />
+          <Route path="*" element={<LandingPage />} />
+        </Routes>
+      </ThemeContext.Provider>
+    );
+  }
+  
+  return (
+    <ThemeContext.Provider value={themeContextValue}>
+      <div className="min-h-screen font-sans text-foreground">
+        <ErrorBoundary>
+          <div className="h-screen flex">
+            <Sidebar 
+              currentPage={currentPage} 
+              onNavigate={handleNavigate} 
+              isSidebarOpen={isSidebarOpen} 
+              setIsSidebarOpen={setIsSidebarOpen}
+              onSendTestAlert={sendTestAlert}
+              topics={topics}
+              profile={profile}
+            />
+            <div className="flex-1 flex flex-col w-full">
+              <Routes>
+                <Route path="/monitoring/:id" element={<SiteDetailPage user={profile} onLogout={handleLogout} openSettings={() => setIsSettingsOpen(true)} isSidebarOpen={isSidebarOpen} setIsSidebarOpen={setIsSidebarOpen} notifications={notifications} systemStatus={systemStatus} onNavigate={handleNavigate}/>} />
+                <Route path="/site-monitoring" element={<SiteMonitoringPage user={profile} onLogout={handleLogout} isSidebarOpen={isSidebarOpen} setIsSidebarOpen={setIsSidebarOpen} notifications={notifications} openSettings={() => setIsSettingsOpen(true)} systemStatus={systemStatus} onNavigate={handleNavigate}/>}/>
+                <Route path="/api-docs" element={ <ApiDocsPage user={profile} onLogout={handleLogout} onNavigate={handleNavigate} isSidebarOpen={isSidebarOpen} setIsSidebarOpen={setIsSidebarOpen} notifications={notifications} openSettings={() => setIsSettingsOpen(true)} systemStatus={systemStatus} /> } />
+                <Route path="/audit-logs" element={ <AuditLogsPage user={profile} onLogout={handleLogout} onNavigate={handleNavigate} isSidebarOpen={isSidebarOpen} setIsSidebarOpen={setIsSidebarOpen} notifications={notifications} openSettings={() => setIsSettingsOpen(true)} systemStatus={systemStatus} userNames={new Map()} /> } />
+                <Route path="/how-it-works" element={ <HowItWorksPage user={profile} onLogout={handleLogout} onNavigate={handleNavigate} isSidebarOpen={isSidebarOpen} setIsSidebarOpen={setIsSidebarOpen} notifications={notifications} openSettings={() => setIsSettingsOpen(true)} systemStatus={systemStatus} /> } />
+                <Route path="/integrations" element={<IntegrationPage user={profile} onLogout={handleLogout} isSidebarOpen={isSidebarOpen} setIsSidebarOpen={setIsSidebarOpen} notifications={notifications} openSettings={() => setIsSettingsOpen(true)} systemStatus={systemStatus} onNavigate={handleNavigate}/>}/>
+                <Route path="/user-management" element={<UserManagementPage user={profile} onLogout={handleLogout} isSidebarOpen={isSidebarOpen} setIsSidebarOpen={setIsSidebarOpen} notifications={notifications} openSettings={() => setIsSettingsOpen(true)} systemStatus={systemStatus} onNavigate={handleNavigate} topics={topics} onUpdateTopicTeam={async () => {}} />}/>
+                <Route path="/calendar" element={ <CalendarPage user={profile} onLogout={handleLogout} onNavigate={handleNavigate} isSidebarOpen={isSidebarOpen} setIsSidebarOpen={setIsSidebarOpen} notifications={notifications} openSettings={() => setIsSettingsOpen(true)} systemStatus={systemStatus} /> } />
+                <Route path="/synthetic-monitoring" element={<SyntheticMonitoringPage />}/>
+                <Route path="/emails" element={<EmailsPage user={profile} onLogout={handleLogout} onNavigate={handleNavigate} isSidebarOpen={isSidebarOpen} setIsSidebarOpen={setIsSidebarOpen} notifications={notifications} openSettings={() => setIsSettingsOpen(true)} systemStatus={systemStatus} />} />
+                <Route path="/payments" element={<PaymentsDashboardPage user={profile} onLogout={handleLogout} onNavigate={handleNavigate} isSidebarOpen={isSidebarOpen} setIsSidebarOpen={setIsSidebarOpen} notifications={notifications} openSettings={() => setIsSettingsOpen(true)} systemStatus={systemStatus} />} />
+                <Route path="/orders-health" element={<OrdersHealthDashboardPage user={profile} onLogout={handleLogout} onNavigate={handleNavigate} isSidebarOpen={isSidebarOpen} setIsSidebarOpen={setIsSidebarOpen} notifications={notifications} openSettings={() => setIsSettingsOpen(true)} systemStatus={systemStatus} />} />
+                <Route path="/inventory-health" element={<InventoryHealthPage user={profile} onLogout={handleLogout} onNavigate={handleNavigate} isSidebarOpen={isSidebarOpen} setIsSidebarOpen={setIsSidebarOpen} notifications={notifications} openSettings={() => setIsSettingsOpen(true)} systemStatus={systemStatus} />} />
+                <Route path="/order-tracking/:orderId" element={<OrderTrackingPage user={profile} isSidebarOpen={isSidebarOpen} setIsSidebarOpen={setIsSidebarOpen} onLogout={handleLogout} onNavigate={handleNavigate} notifications={notifications} openSettings={() => setIsSettingsOpen(true)} systemStatus={systemStatus} />} />
+                {profile && <Route path="/analytics" element={ <AnalyticsPage user={profile} onLogout={handleLogout} onNavigate={handleNavigate} isSidebarOpen={isSidebarOpen} setIsSidebarOpen={setIsSidebarOpen} notifications={notifications} openSettings={() => setIsSettingsOpen(true)} systemStatus={systemStatus} topics={topics} /> } />}
+                <Route path="/topic-manager" element={<TopicManagerPage onLogout={handleLogout} onNavigate={handleNavigate} isSidebarOpen={isSidebarOpen} setIsSidebarOpen={setIsSidebarOpen} notifications={notifications} openSettings={() => setIsSettingsOpen(true)} systemStatus={systemStatus} onAddTopic={handleAddTopic} onToggleSubscription={handleToggleSubscription} onDeleteTopic={handleDeleteTopic} topics={topics} profile={profile} />}/>
+                
+                <Route path="*" element={(() => {
+                  if (profileLoading || dataLoading) {
+                    return (
+                      <div className="flex-1 flex items-center justify-center">
+                        <div className="text-center">
+                          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+                          <p>Loading Your Dashboard...</p>
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  if (profileError) {
+                    return (
+                      <div className="flex-1 flex items-center justify-center p-4">
+                        <div className="text-center p-6 bg-red-50 dark:bg-red-900/20 border border-red-400 dark:border-red-700 rounded-lg max-w-md">
+                          <h3 className="text-lg font-semibold text-red-800 dark:text-red-200">Dashboard Unavailable</h3>
+                          <p className="text-red-600 dark:text-red-300 mt-2">{profileError}</p>
+                          <button onClick={() => window.location.reload()} className="mt-4 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">Try Again</button>
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  return (
+                      <DashboardPage
+                        onLogout={handleLogout}
+                        onNavigate={handleNavigate}
+                        isSidebarOpen={isSidebarOpen}
+                        setIsSidebarOpen={setIsSidebarOpen}
+                        notifications={notifications}
+                        openSettings={() => setIsSettingsOpen(true)}
+                        systemStatus={systemStatus}
+                        topics={topics}
+                        onUpdateNotification={updateNotification}
+                        onAddComment={addComment}
+                        sites={sites}
+                        loadingSites={loadingSites}
+                        sitesError={sitesError}
+                        user={profile}
+                        profile={profile}
+                      />
+                    );
+                })()}/>
+              </Routes>
+            </div>
+          </div>
+
+          <SettingsModal
+            isOpen={isSettingsOpen}
+            onClose={() => setIsSettingsOpen(false)}
+            soundEnabled={soundEnabled}
+            setSoundEnabled={setSoundEnabled}
+            snoozedUntil={snoozedUntil}
+            setSnoozedUntil={setSnoozedUntil}
+            isPushEnabled={isPushEnabled}
+            isPushLoading={isPushLoading}
+            onSubscribeToPush={subscribeToPush}
+            onUnsubscribeFromPush={unsubscribeFromPush}
+          />
+        </ErrorBoundary>
+      </div>
+      
+      <div aria-live="assertive" className="fixed inset-0 flex items-end px-4 py-6 pointer-events-none sm:p-6 sm:items-start z-[100]">
+        <div className="w-full flex flex-col items-center space-y-4 sm:items-end">
+          {toasts.map(toast => (
+            <NotificationToast key={toast.id} notification={toast} onClose={() => removeToast(toast.id)} />
+          ))}
+        </div>
+      </div>
+    </ThemeContext.Provider>
+  );
+}
+
+export default App;

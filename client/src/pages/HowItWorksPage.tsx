@@ -1,0 +1,80 @@
+import React from 'react';
+import { Header } from '../components/layout/Header';
+import { Icon } from '../components/ui/Icon';
+import { Notification, SystemStatusData, User } from '../types';
+
+interface HowItWorksPageProps {
+  notifications: Notification[];
+  onNavigate: (page: string) => void;
+  onLogout: () => Promise<void>;
+  isSidebarOpen: boolean;
+  setIsSidebarOpen: (open: boolean) => void;
+  openSettings: () => void;
+  systemStatus: SystemStatusData;
+  user: User | null;
+}
+
+const steps = [
+    {
+        step: "01",
+        icon: "zap",
+        title: "Integrate Your Service",
+        description: "Use our simple REST API to send alerts from your application or monitoring tool. Just a single POST request is all it takes."
+    },
+    {
+        step: "02",
+        icon: "bell-ring",
+        title: "Receive Instant Alerts",
+        description: "Subscribed users get real-time push notifications with sound on their devices, ensuring critical events are never missed."
+    },
+    {
+        step: "03",
+        icon: "layout-dashboard",
+        title: "Manage on the Dashboard",
+        description: "View, acknowledge, and resolve alerts from the central dashboard. Collaborate with your team by adding comments to the activity feed."
+    }
+];
+
+export const HowItWorksPage: React.FC<HowItWorksPageProps> = ({ notifications, onNavigate, onLogout, isSidebarOpen, setIsSidebarOpen, openSettings, systemStatus, user }) => {
+  return (
+    <>
+      <Header onNavigate={onNavigate} onLogout={onLogout} notifications={notifications} isSidebarOpen={isSidebarOpen} setIsSidebarOpen={setIsSidebarOpen} openSettings={openSettings} systemStatus={systemStatus} profile={user} title="How It Works" />
+      <main className="flex-1 overflow-y-auto bg-background md:ml-72">
+        <div className="max-w-screen-2xl mx-auto p-4 sm:p-6 lg:p-8">
+            <div className="max-w-4xl mx-auto">
+                <div className="text-center mb-16">
+                    <h1 className="text-4xl sm:text-5xl font-bold tracking-tight text-foreground">
+                        A Simple, Powerful Workflow
+                    </h1>
+                    <p className="mt-4 text-lg leading-8 text-muted-foreground">
+                        Get up and running with MCM Alerts in just three simple steps.
+                    </p>
+                </div>
+                
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+                    {steps.map((item, index) => (
+                        <div key={item.step} className="relative bg-card p-8 rounded-2xl border shadow-sm transition-all hover:shadow-lg hover:-translate-y-1">
+                           <div className="flex items-center justify-between mb-4">
+                                <div className="p-3 bg-primary/10 rounded-lg">
+                                    <Icon name={item.icon} className="w-6 h-6 text-primary" />
+
+                                </div>
+                                <span className="text-6xl font-bold text-border">{item.step}</span>
+                            </div>
+                            <h3 className="text-xl font-semibold text-foreground mt-6">{item.title}</h3>
+                            <p className="mt-2 text-base text-muted-foreground">{item.description}</p>
+                        </div>
+                    ))}
+                </div>
+
+                <div className="mt-20 text-center">
+                     <button onClick={() => onNavigate('api-docs')} className="inline-flex h-12 items-center justify-center rounded-lg bg-primary px-8 text-sm font-bold text-primary-foreground shadow-lg shadow-primary/20 transition-all hover:bg-primary/90">
+                        View API Docs
+                    </button>
+                </div>
+            </div>
+        </div>
+      </main>
+    </>
+  );
+};
