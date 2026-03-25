@@ -197,12 +197,90 @@ const handleTopics = async (client, method, path, body, user, corsHeaders) => {
 };
 
 const handleNotifications = async (client, method, path, body, user, corsHeaders) => {
+    const pathParts = path.split('/').filter(Boolean); // e.g. ["notifications", "abc-123", "comments"]
+    const notificationId = pathParts[1];
+    const isTest = pathParts[1] === 'test';
+    const isComments = pathParts[2] === 'comments';
+
+    // POST /notifications/test
+    if (method === 'POST' && isTest) {
+        // Find the 'Site Monitoring' topic to associate the test alert with
+        const topicRes = await client.query("SELECT id FROM public.topics WHERE name = 'Site Monitoring' LIMIT 1");
+        if (topicRes.rows.length === 0) {
+            return jsonResponse(500, { error: 'Could not find the default "Site Monitoring" topic.' }, {}, corsHeaders);
+        }
+        const topicId = topicRes.rows[0].id;
+
+        // Create a test notification in the database
+        const { rows } = await client.query(
+            `INSERT INTO public.notifications (topic_id, title, message, severity, status, type)
+             VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+            [topicId, 'Test Alert: Everything is Awesome!', 'This is a test notification to confirm your alert setup is working correctly. No action is required.', 'low', 'new', 'manual']
+        );
+        
+        // In a real-world scenario, you would also trigger a push notification to the user here.
+        
+        return jsonResponse(201, rows[0], {}, corsHeaders);
+    }
+
+    if (notificationId) {
+        // POST /notifications/:id/comments
+        if (isComments && method === 'POST') {
+            const { text } = body;
+            if (!text || typeof text !== 'string' || text.trim().length === 0) {
+                return jsonResponse(400, { error: 'Comment text is required and must be a non-empty string.' }, {}, corsHeaders);
+            }
+            const { rows } = await client.query(
+                "INSERT INTO public.comments (notification_id, user_id, text) VALUES ($1, $2, $3) RETURNING *",
+                [notificationId, user.id, text.trim()]
+            );
+            return jsonResponse(201, rows[0], {}, corsHeaders);
+        }
+
+        // GET /notifications/:id
+        if (method === 'GET') {
+            const notifQuery = client.query("SELECT * FROM public.notifications WHERE id = $1", [notificationId]);
+            const commentsQuery = client.query("SELECT c.id, c.text, c.created_at, u.full_name, u.email FROM public.comments c JOIN public.users u ON c.user_id = u.id WHERE c.notification_id = $1 ORDER BY c.created_at ASC", [notificationId]);
+
+            const [notifResult, commentsResult] = await Promise.all([notifQuery, commentsQuery]);
+
+            if (notifResult.rows.length === 0) {
+                return jsonResponse(404, { error: 'Notification not found' }, {}, corsHeaders);
+            }
+
+            const notification = notifResult.rows[0];
+            notification.comments = commentsResult.rows;
+
+            return jsonResponse(200, notification, {}, corsHeaders);
+        }
+
+        // PUT /notifications/:id
+        if (method === 'PUT') {
+            const { status } = body;
+            const validStatuses = ['new', 'acknowledged', 'resolved'];
+            if (!status || !validStatuses.includes(status)) {
+                return jsonResponse(400, { error: `Invalid status. Must be one of: ${validStatuses.join(', ')}.` }, {}, corsHeaders);
+            }
+            const { rows } = await client.query(
+                "UPDATE public.notifications SET status = $1 WHERE id = $2 RETURNING *",
+                [status, notificationId]
+            );
+            if (rows.length === 0) {
+                return jsonResponse(404, { error: 'Notification not found' }, {}, corsHeaders);
+            }
+            return jsonResponse(200, rows[0], {}, corsHeaders);
+        }
+    }
+
+    // GET /notifications (list all)
     if (method === 'GET') {
         const { rows } = await client.query("SELECT id, topic_id, title, message, severity, status, type, metadata, created_at FROM public.notifications ORDER BY created_at DESC LIMIT 100");
         return jsonResponse(200, rows, {}, corsHeaders);
     }
-    return jsonResponse(405, { error: `Method ${method} Not Allowed on /notifications` }, {}, corsHeaders);
+
+    return jsonResponse(405, { error: `Method ${method} Not Allowed on ${path}` }, {}, corsHeaders);
 };
+
 
 const handleWebhooks = async (client, method, path, body, corsHeaders) => {
     if (method === 'GET') {

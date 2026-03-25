@@ -31,7 +31,17 @@ import SyntheticMonitoringPage from './pages/monitoring/SyntheticMonitoringPage'
 import ErrorBoundary from './components/ui/ErrorBoundary';
 import { getCurrentUser, userPool } from './lib/cognitoClient';
 import { CognitoUserSession } from 'amazon-cognito-identity-js';
-import { getNotifications, getTopics, getSites, addComment as apiAddComment, updateNotification as apiUpdateNotification, addTopic as apiAddTopic, deleteTopic as apiDeleteTopic, toggleTopicSubscription } from './lib/api';
+import { 
+  getNotifications, 
+  getTopics, 
+  getSites, 
+  addComment as apiAddComment, 
+  updateNotification as apiUpdateNotification, 
+  addTopic as apiAddTopic, 
+  deleteTopic as apiDeleteTopic, 
+  toggleTopicSubscription,
+  sendTestAlert as apiSendTestAlert
+} from './lib/api';
 
 interface ExtendedNotification extends Notification {
   oneSignalId?: string;
@@ -256,8 +266,25 @@ function App() {
   }, [profile, navigate]);
   
   const sendTestAlert = useCallback(async () => {
-    alert('Sending test alerts is not implemented in this version.');
-  }, []);
+    try {
+      console.log('🚀 Sending test alert...');
+      await apiSendTestAlert();
+      console.log('✅ Test alert request sent successfully.');
+      addToast({
+        id: `local-${Date.now()}`,
+        title: "Test Alert Triggered",
+        message: "The test alert was successfully sent. You should receive a push notification and an in-app notification shortly.",
+        severity: 'info',
+        source: 'System',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        status: 'new',
+      } as ExtendedNotification);
+    } catch (error: any) {
+      console.error("❌ Failed to send test alert:", error);
+      alert(`Failed to send test alert: ${error.message}`);
+    }
+  }, [addToast]);
 
   const addComment = useCallback(async (notificationId: string, text: string) => {
     if (!profile) return;

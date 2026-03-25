@@ -1,4 +1,3 @@
-importScripts('https://cdn.onesignal.com/sdks/OneSignalSDKWorker.js');
 import { precacheAndRoute } from 'workbox-precaching';
 
 self.addEventListener('message', (event) => {
