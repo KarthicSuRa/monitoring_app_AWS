@@ -1,8 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
-import { getMonitoringApiUrl } from '../lib/apiClient'; // Changed from supabaseClient
+import { apiClient } from '../lib/apiClient';
 import { MonitoredSite, PingLog, Incident } from '../types';
 
-// The calculateIncidents function remains the same as it is pure logic
 const calculateIncidents = (pings: PingLog[]): Incident[] => {
     const incidents: Incident[] = [];
     let currentIncident: Partial<Incident> | null = null;
@@ -61,7 +60,6 @@ const calculateIncidents = (pings: PingLog[]): Incident[] => {
 const fetchSiteData = async (siteId: string): Promise<MonitoredSite | null> => {
     if (!siteId) return null;
 
-    // Handle demo site (no changes needed here)
     if (siteId === 'demo-site') {
          return {
             id: 'demo-site',
@@ -83,22 +81,14 @@ const fetchSiteData = async (siteId: string): Promise<MonitoredSite | null> => {
         };
     }
 
-    // Fetch data from the new AWS Lambda endpoint
     try {
-        const apiUrl = getMonitoringApiUrl(siteId);
-        const response = await fetch(apiUrl);
-
-        if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(errorData.message || `Failed to fetch site data: ${response.statusText}`);
-        }
-
-        const data = await response.json(); // AWS Lambda will return the site data and ping logs
+        const path = `/monitoring?siteId=${siteId}`;
+        const data = await apiClient.get(path);
 
         const incidents = calculateIncidents(data.ping_logs || []);
 
         return {
-            ...data, // Contains site details like id, name, url, etc.
+            ...data,
             ping_logs: data.ping_logs || [],
             incidents: incidents,
             latest_ping: data.ping_logs && data.ping_logs.length > 0 ? data.ping_logs[0] : undefined,
@@ -106,7 +96,7 @@ const fetchSiteData = async (siteId: string): Promise<MonitoredSite | null> => {
         };
     } catch (error) {
         console.error(`Error fetching monitored site ${siteId}:`, error);
-        throw error; // Re-throw the error to be handled by the hook
+        throw error;
     }
 };
 

@@ -40,7 +40,11 @@ const fetchSiteData = async (client, siteId) => {
     if (!monitoredSiteData) {
         return {
             statusCode: 404,
-            headers: { "Access-Control-Allow-Origin": "*" },
+            headers: { 
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Headers": "Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token",
+                "Access-Control-Allow-Methods": "OPTIONS,GET"
+            },
             body: JSON.stringify({ message: "Site not found" }),
         };
     }
@@ -52,7 +56,11 @@ const fetchSiteData = async (client, siteId) => {
 
     return {
         statusCode: 200,
-        headers: { "Access-Control-Allow-Origin": "*" }, // Add CORS header
+        headers: { 
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token",
+            "Access-Control-Allow-Methods": "OPTIONS,GET"
+        },
         body: JSON.stringify({
             ...monitoredSiteData,
             ping_logs: pingLogs,
@@ -131,7 +139,7 @@ export const handler = async (event) => {
 
                     const payload = {
                         title: `Site Down Alert: ${site.name}`,
-                        message: `The monitored site "${site.name}" (${site.country || 'N/A'}) was detected as down. Error: ${result.error_message || "No details available."}`,
+                        message: `The monitored site \"${site.name}\" (${site.country || 'N/A'}) was detected as down. Error: ${result.error_message || "No details available."}`,
                         severity: "high",
                         type: "site_alert",
                         site: site.name,
@@ -158,6 +166,11 @@ export const handler = async (event) => {
         console.error("Lambda execution failed:", error);
         return {
             statusCode: 500,
+            headers: {
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Headers": "Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token",
+                "Access-Control-Allow-Methods": "OPTIONS,GET"
+            },
             body: JSON.stringify({ error: error.message }),
         };
     } finally {

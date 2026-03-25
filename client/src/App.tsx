@@ -31,7 +31,7 @@ import SyntheticMonitoringPage from './pages/monitoring/SyntheticMonitoringPage'
 import ErrorBoundary from './components/ui/ErrorBoundary';
 import { getCurrentUser, userPool } from './lib/cognitoClient';
 import { CognitoUserSession } from 'amazon-cognito-identity-js';
-import { getNotifications, getTopics, getSites, addComment as apiAddComment, updateNotification as apiUpdateNotification, addTopic as apiAddTopic, deleteTopic as apiDeleteTopic, toggleTopicSubscription as apiToggleTopicSubscription } from './lib/api';
+import { getNotifications, getTopics, getSites, addComment as apiAddComment, updateNotification as apiUpdateNotification, addTopic as apiAddTopic, deleteTopic as apiDeleteTopic, toggleTopicSubscription } from './lib/api';
 
 interface ExtendedNotification extends Notification {
   oneSignalId?: string;
@@ -59,7 +59,6 @@ function App() {
   const navigate = useNavigate();
   const location = useLocation();
   const oneSignalService = OneSignalService.getInstance();
-  const oneSignalInitialized = useRef(false);
   const dataFetched = useRef(false);
 
   const currentPage = useMemo(() => {
@@ -190,46 +189,21 @@ function App() {
   }, [profile]);
 
   useEffect(() => {
-    if (!profile || oneSignalInitialized.current) {
-      return;
-    }
-    oneSignalInitialized.current = true;
-
-    const initOneSignal = async () => {
+    const checkSubscription = async () => {
       try {
-        console.log('🔔 Initializing OneSignal...');
-        await oneSignalService.initialize();
-        console.log(`🔔 Logging into OneSignal with external user ID: ${profile.id}`);
-        await oneSignalService.login(profile.id);
-
         const isSubscribed = await oneSignalService.isSubscribed();
         setIsPushEnabled(isSubscribed);
-
-        oneSignalService.onSubscriptionChange((subscribed: boolean) => {
-          setIsPushEnabled(subscribed);
-        });
-
-        oneSignalService.setupForegroundNotifications((notification: any) => {
-            console.log('📱 Foreground notification received from OneSignal:', notification);
-            const formattedNotification: ExtendedNotification = {
-              ...notification.additionalData,
-              id: notification.notificationId,
-              title: notification.title,
-              message: notification.body,
-            };
-            handleNewNotification(formattedNotification);
-       });
-
-        console.log('✅ OneSignal initialized.');
-      } catch (error: any) {
-        console.error('❌ Failed to initialize OneSignal:', error);
-        oneSignalInitialized.current = false; // Allow retry
+      } catch (error) {
+        console.error("Failed to get initial subscription state", error);
       }
     };
+    checkSubscription();
 
-    initOneSignal();
-  }, [profile, oneSignalService, handleNewNotification]);
-  
+    oneSignalService.onSubscriptionChange((isSubscribed) => {
+      setIsPushEnabled(isSubscribed);
+    });
+  }, [oneSignalService]);
+
   useEffect(() => {
     if (theme === 'dark') {
       document.documentElement.classList.add('dark');
@@ -264,7 +238,6 @@ function App() {
     } finally {
         setProfile(null);
         dataFetched.current = false;
-        oneSignalInitialized.current = false;
         setNotifications([]);
         setTopics([]);
         setSites([]);
@@ -330,7 +303,7 @@ function App() {
   const handleToggleSubscription = useCallback(async (topic: Topic) => {
     setTopics(prev => prev.map(t => t.id === topic.id ? { ...t, subscribed: !t.subscribed } : t));
     try {
-      await apiToggleTopicSubscription(topic.id);
+      await toggleTopicSubscription(topic.id);
       if (isPushEnabled) {
         if (topic.subscribed) {
           oneSignalService.removeUserTags([`topic_${topic.id}`]);
@@ -361,13 +334,37 @@ function App() {
     alert('Clearing logs is not implemented in this version.');
   }, []);
 
- const subscribeToPush = useCallback(async () => {
-    alert('Push subscriptions are not fully implemented in this version.');
-  }, []);
+  const subscribeToPush = useCallback(async () => {
+    setIsPushLoading(true);
+    try {
+      const playerId = await oneSignalService.subscribe();
+      if (playerId) {
+        console.log('✅ Push subscription successful, player ID:', playerId);
+        setIsPushEnabled(true);
+      } else {
+        alert('Could not subscribe to push notifications. Please check your browser settings and grant permission.');
+      }
+    } catch (error: any) {
+      console.error('❌ Failed to subscribe to push notifications:', error);
+      alert(`Error: ${error.message}`);
+    } finally {
+      setIsPushLoading(false);
+    }
+  }, [oneSignalService]);
 
   const unsubscribeFromPush = useCallback(async () => {
-    alert('Push subscriptions are not fully implemented in this version.');
-  }, []);
+    setIsPushLoading(true);
+    try {
+      await oneSignalService.unsubscribe();
+      console.log('✅ Push unsubscription successful.');
+      setIsPushEnabled(false);
+    } catch (error: any) {
+      console.error('❌ Failed to unsubscribe from push notifications:', error);
+      alert('An error occurred while trying to unsubscribe from push notifications.');
+    } finally {
+      setIsPushLoading(false);
+    }
+  }, [oneSignalService]);
 
   const themeContextValue = useMemo(() => ({ theme, toggleTheme }), [theme, toggleTheme]);
 

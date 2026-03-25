@@ -13,7 +13,7 @@ export const deleteSite = (siteId: string): Promise<void> => apiClient.delete(`/
 export const getTopics = (): Promise<Topic[]> => apiClient.get('/topics');
 export const addTopic = (topic: { name: string, description: string }): Promise<Topic> => apiClient.post('/topics', topic);
 export const deleteTopic = (topicId: string): Promise<void> => apiClient.delete(`/topics/${topicId}`);
-export const toggleTopicSubscription = (topicId: string): Promise<void> => apiClient.post(`/topics/${topicId}/subscribe`, {});
+export const toggleTopicSubscription = (topicId: string): Promise<void> => apiClient.post(`/topics/${topicId}/subscription`, {});
 export const updateTopicTeam = (topicId: string, teamId: string | null): Promise<void> => apiClient.put(`/teams/${teamId}/topics`, { topic_id: topicId, assign: !!teamId });
 
 

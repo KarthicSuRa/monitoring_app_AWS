@@ -254,6 +254,18 @@ const handleEmails = async (client, method, path, body, corsHeaders) => {
     return jsonResponse(405, { error: `Method ${method} Not Allowed on /emails` }, {}, corsHeaders);
 };
 
+const handleMonitoring = async (client, method, event, corsHeaders) => {
+    if (method !== 'GET') {
+        return jsonResponse(405, { error: `Method ${method} Not Allowed on /monitoring` }, {}, corsHeaders);
+    }
+    const siteId = event.queryStringParameters?.siteId;
+    if (!siteId) {
+        return jsonResponse(400, { error: 'siteId query parameter is required' }, {}, corsHeaders);
+    }
+    // Re-use the logic from handleSites by simulating the path
+    const simulatedPath = `/sites/${siteId}`;
+    return await handleSites(client, 'GET', simulatedPath, {}, corsHeaders);
+};
 
 // =============================================================
 //  MAIN LAMBDA HANDLER
@@ -295,6 +307,7 @@ exports.handler = async (event) => {
     if (path.startsWith("/users")) return await handleUsers(client, method, path, body, user, corsHeaders);
     if (path.startsWith("/teams")) return await handleTeams(client, method, path, body, user, corsHeaders);
     if (path.startsWith("/sites")) return await handleSites(client, method, path, body, corsHeaders);
+    if (path.startsWith("/monitoring")) return await handleMonitoring(client, method, event, corsHeaders);
     if (path.startsWith("/topics")) return await handleTopics(client, method, path, body, user, corsHeaders);
     if (path.startsWith("/notifications")) return await handleNotifications(client, method, path, body, user, corsHeaders);
     if (path.startsWith("/webhooks")) return await handleWebhooks(client, method, path, body, corsHeaders);

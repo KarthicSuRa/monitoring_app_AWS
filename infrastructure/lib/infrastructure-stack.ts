@@ -116,7 +116,10 @@ export class InfrastructureStack extends cdk.Stack {
     const api = new apigateway.RestApi(this, 'McmAlertsApi', {
       restApiName: 'MCM Alerts Service API',
       defaultCorsPreflightOptions: {
-        allowOrigins: apigateway.Cors.ALL_ORIGINS,
+        allowOrigins: [
+            'http://localhost:3000',
+            `https://${distribution.distributionDomainName}`
+        ],
         allowMethods: apigateway.Cors.ALL_METHODS,
         allowHeaders: apigateway.Cors.DEFAULT_HEADERS.concat(['Authorization']),
         allowCredentials: true,
@@ -179,9 +182,8 @@ export class InfrastructureStack extends cdk.Stack {
 
     dbInitCustomResource.node.addDependency(dbInstance);
 
-    const apiLambda = new lambda.Function(this, 'McmApiLambda', {
+    const commonLambdaProps = {
       runtime: lambda.Runtime.NODEJS_18_X,
-      handler: 'api-lambda.handler',
       code: lambdaCode,
       timeout: Duration.seconds(30),
       environment: {
@@ -198,47 +200,71 @@ export class InfrastructureStack extends cdk.Stack {
       vpcSubnets: {
         subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
       },
-    });
+    };
 
+    const apiLambda = new lambda.Function(this, 'McmApiLambda', {
+      ...commonLambdaProps,
+      handler: 'api-lambda.handler',
+    });
     dbInstance.connections.allowDefaultPortFrom(apiLambda);
 
+    const topicSubscribersLambda = new lambda.Function(this, 'TopicSubscribersLambda', {
+      ...commonLambdaProps,
+      handler: 'topic-subscribers-lambda.handler',
+    });
+    dbInstance.connections.allowDefaultPortFrom(topicSubscribersLambda);
+
     const apiLambdaIntegration = new apigateway.LambdaIntegration(apiLambda);
+    const topicSubscribersLambdaIntegration = new apigateway.LambdaIntegration(topicSubscribersLambda);
+
+    const authorizer = new apigateway.CognitoUserPoolsAuthorizer(this, 'McmAlertsCognitoAuthorizer', {
+        cognitoUserPools: [userPool]
+    });
 
     const users = api.root.addResource('users');
-    users.addMethod('GET', apiLambdaIntegration);
+    users.addMethod('GET', apiLambdaIntegration, { authorizer });
     const user = users.addResource('{userId}');
-    user.addMethod('GET', apiLambdaIntegration);
-    user.addMethod('PUT', apiLambdaIntegration);
+    user.addMethod('GET', apiLambdaIntegration, { authorizer });
+    user.addMethod('PUT', apiLambdaIntegration, { authorizer });
 
     const teams = api.root.addResource('teams');
-    teams.addMethod('GET', apiLambdaIntegration);
+    teams.addMethod('GET', apiLambdaIntegration, { authorizer });
 
     const sites = api.root.addResource('sites');
-    sites.addMethod('GET', apiLambdaIntegration);
-    sites.addMethod('POST', apiLambdaIntegration);
+    sites.addMethod('GET', apiLambdaIntegration, { authorizer });
+    sites.addMethod('POST', apiLambdaIntegration, { authorizer });
     const site = sites.addResource('{siteId}');
-    site.addMethod('DELETE', apiLambdaIntegration);
+    site.addMethod('DELETE', apiLambdaIntegration, { authorizer });
+    
+    const monitoring = api.root.addResource('monitoring');
+    monitoring.addMethod('GET', apiLambdaIntegration, { authorizer });
     
     const topics = api.root.addResource('topics');
-    topics.addMethod('GET', apiLambdaIntegration);
-    topics.addMethod('POST', apiLambdaIntegration);
+    topics.addMethod('GET', apiLambdaIntegration, { authorizer });
+    topics.addMethod('POST', apiLambdaIntegration, { authorizer });
+
+    const topicResource = topics.addResource('{topicId}');
+    const subscriptionResource = topicResource.addResource('subscription');
+    subscriptionResource.addMethod('POST', topicSubscribersLambdaIntegration, { authorizer });
+    const subscribersResource = topicResource.addResource('subscribers');
+    subscribersResource.addMethod('GET', topicSubscribersLambdaIntegration, { authorizer });
 
     const notifications = api.root.addResource('notifications');
-    notifications.addMethod('GET', apiLambdaIntegration);
+    notifications.addMethod('GET', apiLambdaIntegration, { authorizer });
 
     const webhooks = api.root.addResource('webhooks');
-    webhooks.addMethod('GET', apiLambdaIntegration);
-    webhooks.addMethod('POST', apiLambdaIntegration);
+    webhooks.addMethod('GET', apiLambdaIntegration, { authorizer });
+    webhooks.addMethod('POST', apiLambdaIntegration, { authorizer });
 
     const calendar = api.root.addResource('calendar');
-    calendar.addMethod('GET', apiLambdaIntegration);
-    calendar.addMethod('POST', apiLambdaIntegration);
+    calendar.addMethod('GET', apiLambdaIntegration, { authorizer });
+    calendar.addMethod('POST', apiLambdaIntegration, { authorizer });
 
     const auditLogs = api.root.addResource('audit-logs');
-    auditLogs.addMethod('GET', apiLambdaIntegration);
+    auditLogs.addMethod('GET', apiLambdaIntegration, { authorizer });
 
     const emails = api.root.addResource('emails');
-    emails.addMethod('GET', apiLambdaIntegration);
+    emails.addMethod('GET', apiLambdaIntegration, { authorizer });
 
     api.latestDeployment?.node.addDependency(dbInitCustomResource);
 
