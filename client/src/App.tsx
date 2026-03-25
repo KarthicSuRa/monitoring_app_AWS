@@ -277,7 +277,7 @@ function App() {
 
   const handleNavigate = useCallback((page: string) => {
     if (profile) {
-      navigate(`/${page}`);
+      navigate(page);
     }
     setIsSidebarOpen(false);
   }, [profile, navigate]);

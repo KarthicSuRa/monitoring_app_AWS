@@ -4,7 +4,8 @@ const { CognitoJwtVerifier } = require("aws-jwt-verify");
 // Centralized CORS configuration
 const getCorsHeaders = (event) => {
   const origin = event.headers.origin || event.headers.Origin;
-  const allowedOrigins = [process.env.CLOUDFRONT_URL, 'http://localhost:3000'];
+  // Allow localhost for development and the CloudFront URL for production
+  const allowedOrigins = [process.env.CLOUDFRONT_URL, 'http://localhost:3000', 'https://localhost:3000'];
 
   if (allowedOrigins.includes(origin)) {
     return {
@@ -108,10 +109,58 @@ const handleTeams = async (client, method, path, body, user, corsHeaders) => {
 };
 
 const handleSites = async (client, method, path, body, corsHeaders) => {
-    if (method === 'GET') {
-        const { rows } = await client.query("SELECT id, name, url, country, latitude, longitude, is_paused, status, created_at, updated_at FROM public.monitored_sites ORDER BY name");
-        return jsonResponse(200, rows, {}, corsHeaders);
+    const pathParts = path.split('/').filter(Boolean);
+    const siteId = pathParts[1];
+
+    if (method === 'GET' && siteId) {
+        // Fetch a single site with its ping logs
+        const siteQuery = "SELECT * FROM public.monitored_sites WHERE id = $1";
+        const pingsQuery = "SELECT * FROM public.ping_logs WHERE site_id = $1 ORDER BY checked_at DESC LIMIT 100";
+
+        const siteResult = await client.query(siteQuery, [siteId]);
+        if (siteResult.rows.length === 0) {
+            return jsonResponse(404, { error: 'Site not found' }, {}, corsHeaders);
+        }
+
+        const pingsResult = await client.query(pingsQuery, [siteId]);
+        const site = siteResult.rows[0];
+        site.ping_logs = pingsResult.rows;
+
+        return jsonResponse(200, site, {}, corsHeaders);
     }
+    
+    if (method === 'GET') {
+        // Fetch all sites with their latest ping status
+        const query = `
+            SELECT
+                s.id, s.name, s.url, s.country, s.latitude, s.longitude, s.is_paused, s.created_at, s.updated_at,
+                lp.is_up,
+                lp.response_time_ms,
+                lp.checked_at as latest_ping_at
+            FROM
+                public.monitored_sites s
+            LEFT JOIN LATERAL (
+                SELECT is_up, response_time_ms, checked_at
+                FROM public.ping_logs
+                WHERE site_id = s.id
+                ORDER BY checked_at DESC
+                LIMIT 1
+            ) lp ON true
+            ORDER BY s.name;
+        `;
+        const { rows } = await client.query(query);
+        const sites = rows.map(site => ({
+            ...site,
+            status: site.is_up === null ? 'unknown' : (site.is_up ? 'online' : 'offline'),
+            latest_ping: site.latest_ping_at ? {
+                is_up: site.is_up,
+                response_time_ms: site.response_time_ms,
+                checked_at: site.latest_ping_at
+            } : null
+        }));
+        return jsonResponse(200, sites, {}, corsHeaders);
+    }
+
     if (method === 'POST') {
         const { name, url, country, latitude, longitude } = body;
         if (!name || !url) return jsonResponse(400, {error: 'Name and URL are required'}, {}, corsHeaders);
@@ -122,13 +171,13 @@ const handleSites = async (client, method, path, body, corsHeaders) => {
         return jsonResponse(201, rows[0], {}, corsHeaders);
     }
     if (method === 'DELETE') {
-        const siteId = path.split('/')[2];
         if(!siteId) return jsonResponse(400, {error: 'Site ID is required'}, {}, corsHeaders);
         await client.query("DELETE FROM public.monitored_sites WHERE id = $1", [siteId]);
         return jsonResponse(204, {}, {}, corsHeaders);
     }
     return jsonResponse(405, { error: `Method ${method} Not Allowed on /sites` }, {}, corsHeaders);
 };
+
 
 const handleTopics = async (client, method, path, body, user, corsHeaders) => {
     if (method === 'GET') {
@@ -217,6 +266,12 @@ exports.handler = async (event) => {
     return { statusCode: 204, headers: corsHeaders, body: '' };
   }
 
+  // Temporary check to allow synthetic monitoring pings
+  if (event.path === '/synthetic-ping' && event.httpMethod === 'GET') {
+      return jsonResponse(200, { message: 'Ping successful' }, {}, corsHeaders);
+  }
+
+
   if (!corsHeaders['Access-Control-Allow-Origin']) {
     return jsonResponse(403, { error: "CORS error: Origin not allowed" }, {}, corsHeaders);
   }
@@ -251,7 +306,9 @@ exports.handler = async (event) => {
 
   } catch (err) {
     console.error("FATAL_ERROR in Lambda handler:", err);
-    return jsonResponse(500, { error: "Internal Server Error", details: err.message, stack: err.stack }, {}, corsHeaders);
+    // Sanitize error message for production
+    const errorMessage = process.env.NODE_ENV === 'production' ? "Internal Server Error" : err.message;
+    return jsonResponse(500, { error: "Internal Server Error", details: errorMessage }, {}, corsHeaders);
   } finally {
     if (client) client.release();
   }

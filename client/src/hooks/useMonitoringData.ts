@@ -102,7 +102,7 @@ const fetchSiteData = async (siteId: string): Promise<MonitoredSite | null> => {
             ping_logs: data.ping_logs || [],
             incidents: incidents,
             latest_ping: data.ping_logs && data.ping_logs.length > 0 ? data.ping_logs[0] : undefined,
-            status: data.ping_logs && data.ping_logs.length > 0 ? (data.ping_logs[0].is_up ? 'online' : 'offline') : 'unknown',
+            status: data.ping_logs && data.ping_logs.length > 0 ? (data.ping_logs[0].is_up === true ? 'online' : 'offline') : 'unknown',
         };
     } catch (error) {
         console.error(`Error fetching monitored site ${siteId}:`, error);
