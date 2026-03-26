@@ -1,152 +1,143 @@
-import { Pool } from "pg";
-
-// Database connection pool, initialized lazily.
-let pool;
+const { Pool } = require('pg');
 
 const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Adyen-HMAC-Signature',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-/**
- * Initializes the database connection pool using the DATABASE_URL environment variable.
- */
-function initializePool() {
-  if (pool) return;
-  const connectionString = process.env.DATABASE_URL;
-  if (!connectionString) {
-    throw new Error("DATABASE_URL environment variable not set.");
-  }
-  pool = new Pool({
-    connectionString,
-    ssl: { rejectUnauthorized: false }, // Adjust as required
-  });
-}
-
-/**
- * Creates a standardized HTTP response.
- */
 const createResponse = (statusCode, body) => ({
   statusCode,
-  headers: { ...corsHeaders, "Content-Type": "application/json" },
+  headers: { ...corsHeaders, 'Content-Type': 'application/json' },
   body: JSON.stringify(body),
 });
 
-// --- Adyen Specific Logic (Identical to original) ---
-function shouldNotifyAdyen(eventCode, success) {
-  const isSuccess = success === "true";
-  const failureEvents = ["CAPTURE_FAILED", "REFUND_FAILED", "CHARGEBACK", "NOTIFICATION_OF_CHARGEBACK"];
-  const failureOnlyEvents = ["AUTHORISATION", "CAPTURE", "REFUND", "CANCELLATION"];
-  return failureEvents.includes(eventCode) || (failureOnlyEvents.includes(eventCode) && !isSuccess);
+let pool;
+function initializePool() {
+  if (pool) return;
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) throw new Error('DATABASE_URL is not set.');
+  pool = new Pool({ connectionString, ssl: { rejectUnauthorized: false } });
 }
 
 function transformAdyenPayload(payload) {
-  const item = payload.notificationItems?.[0]?.NotificationRequestItem;
-  if (!item) return null;
+    const notification = payload.notificationItems?.[0]?.NotificationRequestItem;
+    if (!notification) return null;
 
-  const { eventCode, success, amount, pspReference, merchantAccountCode, merchantReference, reason } = item;
-  if (!shouldNotifyAdyen(eventCode, success)) return null;
+    const { eventCode, amount, pspReference, reason, success } = notification;
+    const isSuccess = success === 'true';
+    const formattedAmount = `${amount.currency} ${(amount.value / 100).toFixed(2)}`;
 
-  const title = `${eventCode} - ${merchantAccountCode}`;
-  const formattedAmount = amount ? `${amount.currency} ${amount.value / 100}` : "";
+    let title, message, severity, lines = [];
 
-  let messageLines = [];
-  switch (eventCode) {
-    case "AUTHORISATION":
-      messageLines = [`❌ Authorization Failed`, `Amount: ${formattedAmount}`, `PSP: ${pspReference}`, `Merchant Ref: ${merchantReference}`];
-      break;
-    case "CHARGEBACK":
-      messageLines = [`🚨 CHARGEBACK RECEIVED`, `PSP: ${pspReference}`, `Merchant Ref: ${merchantReference}`, `⚠️ Review and supply defense documents ASAP`];
-      break;
-    default:
-      messageLines = [`❌ Event Failed: ${eventCode}`, `PSP: ${pspReference}`, `Merchant Ref: ${merchantReference}`, reason ? `Reason: ${reason}` : ""];
-  }
+    switch (eventCode) {
+        case 'AUTHORISATION':
+            title = isSuccess ? `✅ Auth Success` : `❌ Auth Failed`;
+            lines = [
+                isSuccess ? `Payment of ${formattedAmount} authorized.` : `Auth for ${formattedAmount} failed. Reason: ${reason || 'Unknown'}`,
+                `PSP Ref: ${pspReference}`
+            ];
+            severity = isSuccess ? 'low' : 'medium';
+            break;
+        case 'CAPTURE':
+            title = isSuccess ? `💰 Payment Captured` : `❌ Capture Failed`;
+            lines = [
+                isSuccess ? `Captured ${formattedAmount}.` : `Capture for ${formattedAmount} failed. Reason: ${reason || 'Unknown'}`,
+                `PSP Ref: ${pspReference}`
+            ];
+            severity = isSuccess ? 'low' : 'high';
+            break;
+        case 'CAPTURE_FAILED':
+            title = `❌ Capture Failed`;
+            lines = [
+                `Capture for ${formattedAmount} failed.`,
+                `Reason: ${reason || 'No reason provided.'}`,
+                `PSP Ref: ${pspReference}`
+            ];
+            severity = 'high';
+            break;
+        case 'REFUND':
+            title = isSuccess ? `↩️ Refund Processed` : `❌ Refund Failed`;
+            lines = [
+                isSuccess ? `Refund of ${formattedAmount} processed.` : `Refund for ${formattedAmount} failed. Reason: ${reason || 'Unknown'}`,
+                `PSP Ref: ${pspReference}`
+            ];
+            severity = isSuccess ? 'low' : 'medium';
+            break;
+        default:
+            return null;
+    }
 
-  return {
-    title,
-    message: messageLines.filter(Boolean).join("\n"),
-    severity: "high",
-    metadata: { merchantAccountCode, merchantReference, pspReference, eventCode, success, amount: formattedAmount, failure: true },
-  };
+    message = lines.join('\n');
+    return { title: `${title} (${notification.merchantAccountCode})`, message, severity, metadata: notification };
 }
 
-// --- Generic Webhook Logic (Identical to original) ---
 function transformGenericPayload(payload) {
-  const isFailure = payload?.severity?.toLowerCase() === "high" || payload?.status === "failed" || payload?.error;
-  if (!isFailure) return null;
+    const { title, message, severity, status, ...metadata } = payload;
+    if (!title || !message) return null;
 
-  const title = payload.eventName || payload.title || "Webhook Failure";
-  let message = payload.message || payload.summary || payload.error;
-  if (!message) {
-    const raw = JSON.stringify(payload, null, 2);
-    message = raw.length > 500 ? raw.substring(0, 500) + "..." : raw;
-  }
+    const isFailure = severity === 'high' || severity === 'critical' || status === 'failed' || status === 'error' || !!payload.error;
+    const finalSeverity = severity === 'critical' ? 'high' : (severity || (isFailure ? 'medium' : 'low'));
 
-  return {
-    title,
-    message,
-    severity: "high",
-    metadata: { failure: true },
-  };
+    return { title, message, severity: finalSeverity, metadata };
 }
 
-// --- Lambda Handler ---
-export const handler = async (event) => {
-  if (event.requestContext?.http?.method === "OPTIONS") {
-    return createResponse(200, {});
-  }
-  if (event.requestContext?.http?.method !== "POST") {
-    return createResponse(405, { error: "Method Not Allowed" });
+exports.handler = async (event) => {
+  if (event.requestContext?.http?.method === 'OPTIONS') {
+    return { statusCode: 204, headers: corsHeaders, body: '' };
   }
 
-  let client;
+  const { source_id } = event.queryStringParameters || {};
+  if (!source_id) return createResponse(400, { error: 'Missing source_id query parameter' });
+
+  let payload;
   try {
-    const sourceId = event.queryStringParameters?.source_id;
-    if (!sourceId) {
-      return createResponse(400, { error: "Missing required 'source_id' query parameter." });
+    payload = JSON.parse(event.body || '{}');
+  } catch (e) {
+    return createResponse(400, { error: 'Request body is not valid JSON.' });
+  }
+
+  initializePool();
+  const client = await pool.connect();
+  try {
+    const { rows: [source] } = await client.query('SELECT * FROM public.webhook_sources WHERE id = $1', [source_id]);
+    if (!source) return createResponse(404, { error: 'Webhook source not found' });
+
+    let notification;
+    switch (source.source_type) {
+        case 'adyen':
+            notification = transformAdyenPayload(payload);
+            break;
+        case 'generic':
+        case 'pagerduty':
+        case 'github':
+            notification = transformGenericPayload(payload);
+            break;
+        default:
+            console.warn(`Webhook source ${source.id} has unknown type ${source.source_type}. Treating as generic.`);
+            notification = transformGenericPayload(payload);
     }
 
-    initializePool();
-    client = await pool.connect();
-
-    // 1. Validate the webhook source
-    const sourceResult = await client.query("SELECT id, source_type, topic_id FROM webhook_sources WHERE id = $1", [sourceId]);
-    if (sourceResult.rows.length === 0) {
-      return createResponse(404, { error: "Invalid or unauthorized 'source_id'." });
-    }
-    const source = sourceResult.rows[0];
-
-    // 2. Log the raw webhook event (Identical to original)
-    const payload = JSON.parse(event.body || "{}");
-    await client.query("INSERT INTO webhook_events (source_id, payload) VALUES ($1, $2)", [sourceId, payload]);
-
-    // 3. Transform the payload (Identical to original)
-    let notification = null;
-    if (source.source_type === "adyen") {
-      notification = transformAdyenPayload(payload);
-    } else {
-      notification = transformGenericPayload(payload);
+    if (!notification) {
+      console.log(`Payload from source ${source.id} did not match expected format. No notification created.`);
+      return createResponse(200, { message: 'Payload received, but no actionable event found.' });
     }
 
-    // 4. Insert notification directly if criteria met (Identical to original)
-    if (notification && source.topic_id) {
-      const finalMetadata = { ...notification.metadata, sourceType: source.source_type };
+    const finalMetadata = { webhook_source_id: source.id, ...notification.metadata };
 
-      await client.query(
-        `INSERT INTO notifications (topic_id, title, message, severity, type, metadata)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
-        [source.topic_id, notification.title, notification.message, notification.severity, "webhook", finalMetadata]
-      );
-    }
+    await client.query(
+        `INSERT INTO public.notifications (topic_id, title, message, severity, status, type, metadata)
+         VALUES ($1, $2, $3, $4, 'new', 'webhook', $5)`,
+        [source.topic_id, notification.title, notification.message, notification.severity, finalMetadata]
+    );
+    
+    console.log(`✅ Notification created from webhook source: ${source.name} (${source.id})`);
+    return createResponse(201, { success: true });
 
-    return createResponse(200, { message: "Webhook processed successfully" });
-
-  } catch (error) {
-    console.error("Webhook Lambda failed:", error);
-    return createResponse(500, { error: "Internal server error", message: error.message });
-
+  } catch (err) {
+    console.error('FATAL webhook-lambda error:', err);
+    return createResponse(500, { error: 'Internal Server Error' });
   } finally {
-    if (client) client.release();
+    client.release();
   }
 };

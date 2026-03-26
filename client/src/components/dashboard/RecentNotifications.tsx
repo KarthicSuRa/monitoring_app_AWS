@@ -254,8 +254,9 @@ export const RecentNotifications: React.FC<RecentNotificationsProps> = ({
                                         notification={n}
                                         onUpdateNotification={onUpdateNotification}
                                         onAddComment={onAddComment}
-                                        user={user}
+                                        currentUser={user}
                                         userNames={userNames}
+                                        onClose={() => setExpandedId(null)}
                                     />
                                 )}
                             </div>

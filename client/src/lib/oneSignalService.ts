@@ -73,31 +73,46 @@ export class OneSignalService {
 
   setupForegroundNotifications(callback: (notification: ExtendedNotification) => void): void {
     safeOneSignal((OneSignal) => {
-        OneSignal.Notifications.addEventListener('foregroundWillDisplay', (event: any) => {
-          console.log('🔔 Foreground notification received:', event);
-          try {
-            event.preventDefault();
-          } catch (e) {
-            console.warn("⚠️ Browser does not support preventing default notification display.", e);
-          }
-          const notificationData: ExtendedNotification = {
-            id: event.notification?.notificationId || `fg-${Date.now()}`,
-            oneSignalId: event.notification?.notificationId,
-            title: event.notification?.title || 'Notification',
-            message: event.notification?.body || '',
-            severity: 'medium', 
-            comments: [],
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-            type: event.notification?.additionalData?.type || 'server_alert',
-            timestamp: new Date().toISOString(),
-            site: event.notification?.additionalData?.site || null,
-            topic_id: event.notification?.additionalData?.topic_id || null,
-            status: event.notification?.additionalData?.status || 'new',
-          };
-
-          callback(notificationData);
-        });
+      OneSignal.Notifications.addEventListener('foregroundWillDisplay', (event: any) => {
+        console.log('🔔 Foreground notification received:', event);
+        // HOW IT WORKS: preventDefault() stops OneSignal from showing its own
+        // browser popup while the app is open. We show our own in-app toast instead.
+        try {
+          event.preventDefault();
+        } catch (e) {
+          console.warn('⚠️ Browser does not support preventing default notification display.', e);
+        }
+        const additionalData = event.notification?.additionalData || {};
+        // HOW IT WORKS: Map the raw severity string from the push payload to a valid
+        // TypeScript Severity union type ('low' | 'medium' | 'high'). If the value
+        // from the server isn't one of those, default to 'medium' safely.
+        const rawSeverity = additionalData?.severity || 'medium';
+        const validSeverities: Severity[] = ['low', 'medium', 'high'];
+        const severity: Severity = validSeverities.includes(rawSeverity as Severity)
+          ? (rawSeverity as Severity)
+          : 'medium';
+        // HOW IT WORKS: Build a complete ExtendedNotification object from the push
+        // payload data. This gets passed to handleNewNotification() in App.tsx which:
+        //   1. Adds it to the notifications list (in-app bell)
+        //   2. Adds it to the toast queue (popup)
+        //   3. Plays the alert sound if sound is enabled
+        const notificationData: ExtendedNotification = {
+          id: event.notification?.notificationId || `fg-${Date.now()}`,
+          oneSignalId: event.notification?.notificationId,
+          title: event.notification?.title || 'Notification',
+          message: event.notification?.body || '',
+          severity,                                    // ✅ From push payload, not hardcoded
+          type: additionalData?.type || 'server_alert',
+          timestamp: new Date().toISOString(),
+          site: additionalData?.site || null,
+          topic_id: additionalData?.topic_id || null,
+          status: additionalData?.status || 'new',
+          comments: [],
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+        callback(notificationData);                   // → handleNewNotification in App.tsx
+      });
     });
   }
   

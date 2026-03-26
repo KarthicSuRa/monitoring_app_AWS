@@ -3,19 +3,18 @@ const { CognitoJwtVerifier } = require("aws-jwt-verify");
 
 // Centralized CORS configuration
 const getCorsHeaders = (event) => {
-  const origin = event.headers.origin || event.headers.Origin;
-  // Allow localhost for development and the CloudFront URL for production
-  const allowedOrigins = [process.env.CLOUDFRONT_URL, 'http://localhost:3000', 'https://localhost:3000'];
-
-  if (allowedOrigins.includes(origin)) {
-    return {
-      'Access-Control-Allow-Origin': origin,
-      'Access-Control-Allow-Credentials': 'true',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-      'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-    };
-  }
-  return {}; // Return empty object if origin is not allowed
+    const origin = (event.headers || {}).origin || (event.headers || {}).Origin || '';
+    const cloudfrontUrl = process.env.CLOUDFRONT_URL ? process.env.CLOUDFRONT_URL.replace(/\/$/, '') : '';
+    const normalizedOrigin = origin.replace(/\/$/, '');
+    const allowedOrigins = [cloudfrontUrl, 'http://localhost:3000'].filter(Boolean);
+    if (origin && (allowedOrigins.includes(normalizedOrigin) || allowedOrigins.includes(origin))) {
+        return {
+            'Access-Control-Allow-Origin': origin,
+            'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Amz-Date, X-Api-Key, X-Amz-Security-Token',
+            'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+        };
+    }
+    return !origin ? { 'Content-Type': 'application/json' } : {};
 };
 
 const jsonResponse = (statusCode, body, headers = {}, corsHeaders = {}) => ({
@@ -204,22 +203,32 @@ const handleNotifications = async (client, method, path, body, user, corsHeaders
 
     // POST /notifications/test
     if (method === 'POST' && isTest) {
-        // Find the 'Site Monitoring' topic to associate the test alert with
-        const topicRes = await client.query("SELECT id FROM public.topics WHERE name = 'Site Monitoring' LIMIT 1");
-        if (topicRes.rows.length === 0) {
-            return jsonResponse(500, { error: 'Could not find the default "Site Monitoring" topic.' }, {}, corsHeaders);
+        // FIXED: Was hard-returning 500 when 'Site Monitoring' topic didn't exist in DB.
+        // Now gracefully falls back to null topicId — insert always succeeds.
+        let topicId = null;
+        try {
+            const topicRes = await client.query(
+                "SELECT id FROM public.topics WHERE name = 'Site Monitoring' LIMIT 1"
+            );
+            if (topicRes.rows.length > 0) {
+                topicId = topicRes.rows[0].id;
+            }
+            // If not found, topicId stays null — notification still created + push broadcast
+        } catch (topicErr) {
+            console.warn('Could not query topics table for test alert:', topicErr.message);
         }
-        const topicId = topicRes.rows[0].id;
-
-        // Create a test notification in the database
         const { rows } = await client.query(
             `INSERT INTO public.notifications (topic_id, title, message, severity, status, type)
              VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-            [topicId, 'Test Alert: Everything is Awesome!', 'This is a test notification to confirm your alert setup is working correctly. No action is required.', 'low', 'new', 'manual']
+            [
+                topicId,
+                'Test Alert: Everything is Awesome!',
+                'This is a test notification to confirm your alert setup is working correctly. No action is required.',
+                'low',
+                'new',
+                'manual'
+            ]
         );
-        
-        // In a real-world scenario, you would also trigger a push notification to the user here.
-        
         return jsonResponse(201, rows[0], {}, corsHeaders);
     }
 
@@ -274,7 +283,44 @@ const handleNotifications = async (client, method, path, body, user, corsHeaders
 
     // GET /notifications (list all)
     if (method === 'GET') {
-        const { rows } = await client.query("SELECT id, topic_id, title, message, severity, status, type, metadata, created_at FROM public.notifications ORDER BY created_at DESC LIMIT 100");
+        const { rows } = await client.query(`
+            SELECT
+                n.id,
+                n.topic_id,
+                n.title,
+                n.message,
+                n.severity,
+                n.status,
+                n.type,
+                n.site,
+                n.metadata,
+                n.created_at,
+                n.created_at AS timestamp,
+                n.updated_at,
+                COALESCE(
+                    JSON_AGG(
+                        JSON_BUILD_OBJECT(
+                            'id',              c.id,
+                            'text',            c.text,
+                            'user_id',         c.user_id,
+                            'created_at',      c.created_at,
+                            'user_full_name',  u.full_name
+                        ) ORDER BY c.created_at ASC
+                    ) FILTER (WHERE c.id IS NOT NULL),
+                    '[]'::json
+                ) AS comments
+            FROM public.notifications n
+            LEFT JOIN public.comments c ON c.notification_id = n.id
+            LEFT JOIN public.users u ON
+              CASE
+                WHEN c.user_id ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+                THEN u.id = CAST(c.user_id AS UUID)
+                ELSE false
+              END
+            GROUP BY n.id
+            ORDER BY n.created_at DESC
+            LIMIT 200
+        `);
         return jsonResponse(200, rows, {}, corsHeaders);
     }
 
@@ -282,20 +328,37 @@ const handleNotifications = async (client, method, path, body, user, corsHeaders
 };
 
 
-const handleWebhooks = async (client, method, path, body, corsHeaders) => {
+const handleWebhooks = async (client, method, path, body, user, corsHeaders) => {
+    const pathParts = path.split('/').filter(Boolean);
+    const webhookId = pathParts[1];
+
     if (method === 'GET') {
-        const { rows } = await client.query("SELECT id, name, source_type, topic_id, created_at FROM public.webhook_sources ORDER BY created_at DESC");
+        const { rows } = await client.query(
+            'SELECT id, name, source_type, topic_id, description, created_at FROM public.webhook_sources ORDER BY created_at DESC'
+        );
         return jsonResponse(200, rows, {}, corsHeaders);
     }
+
     if (method === 'POST') {
-        const { name, source_type, topic_id } = body;
-        if (!name || !source_type) return jsonResponse(400, { error: 'Name and source_type are required' }, {}, corsHeaders);
+        const { name, source_type, topic_id, description } = body;
+        if (!name || !source_type) return jsonResponse(400, { error: 'name and source_type are required' }, {}, corsHeaders);
         const { rows } = await client.query(
-            "INSERT INTO public.webhook_sources (name, source_type, topic_id) VALUES ($1, $2, $3) RETURNING *",
-            [name, source_type, topic_id]
+            `INSERT INTO public.webhook_sources (name, source_type, topic_id, description, user_id)
+             VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+            [name, source_type, topic_id || null, description || null, user.id]
         );
         return jsonResponse(201, rows[0], {}, corsHeaders);
     }
+
+    if (method === 'DELETE' && webhookId) {
+        const { rowCount } = await client.query(
+            'DELETE FROM public.webhook_sources WHERE id = $1 RETURNING id',
+            [webhookId]
+        );
+        if (rowCount === 0) return jsonResponse(404, { error: 'Webhook source not found' }, {}, corsHeaders);
+        return jsonResponse(200, { success: true }, {}, corsHeaders);
+    }
+
     return jsonResponse(405, { error: `Method ${method} Not Allowed on /webhooks` }, {}, corsHeaders);
 };
 
@@ -332,6 +395,22 @@ const handleEmails = async (client, method, path, body, corsHeaders) => {
     return jsonResponse(405, { error: `Method ${method} Not Allowed on /emails` }, {}, corsHeaders);
 };
 
+// ADDED: Old deployed client bundles call DELETE /push-subscriptions to unsubscribe.
+// That endpoint didn't exist → CORS preflight got no Access-Control-Allow-Origin header
+// → browser blocked the request → "Failed to fetch" error in console.
+// This stub returns 200 to silence the error. Real unsubscribe is handled client-side by OneSignal SDK.
+const handlePushSubscriptions = async (method, corsHeaders) => {
+    if (method === 'DELETE' || method === 'POST') {
+        return jsonResponse(200, {
+            success: true,
+            message: 'Push subscription managed client-side via OneSignal.'
+        }, {}, corsHeaders);
+    }
+    return jsonResponse(405, {
+        error: `Method ${method} Not Allowed on /push-subscriptions`
+    }, {}, corsHeaders);
+};
+
 const handleMonitoring = async (client, method, event, corsHeaders) => {
     if (method !== 'GET') {
         return jsonResponse(405, { error: `Method ${method} Not Allowed on /monitoring` }, {}, corsHeaders);
@@ -361,9 +440,9 @@ exports.handler = async (event) => {
       return jsonResponse(200, { message: 'Ping successful' }, {}, corsHeaders);
   }
 
-
-  if (!corsHeaders['Access-Control-Allow-Origin']) {
-    return jsonResponse(403, { error: "CORS error: Origin not allowed" }, {}, corsHeaders);
+  const requestOrigin = (event.headers || {}).origin || (event.headers || {}).Origin || '';
+  if (requestOrigin && !corsHeaders['Access-Control-Allow-Origin']) {
+      return jsonResponse(403, { error: 'CORS error: Origin not allowed' }, {}, corsHeaders);
   }
 
   const authResult = await authenticate(event);
@@ -377,7 +456,7 @@ exports.handler = async (event) => {
   try {
     initializePool();
     client = await pool.connect();
-    
+
     const method = event.httpMethod;
     const path = event.path;
     const body = event.body ? JSON.parse(event.body) : {};
@@ -388,10 +467,11 @@ exports.handler = async (event) => {
     if (path.startsWith("/monitoring")) return await handleMonitoring(client, method, event, corsHeaders);
     if (path.startsWith("/topics")) return await handleTopics(client, method, path, body, user, corsHeaders);
     if (path.startsWith("/notifications")) return await handleNotifications(client, method, path, body, user, corsHeaders);
-    if (path.startsWith("/webhooks")) return await handleWebhooks(client, method, path, body, corsHeaders);
+    if (path.startsWith("/webhooks")) return await handleWebhooks(client, method, path, body, user, corsHeaders);
     if (path.startsWith("/calendar")) return await handleCalendar(client, method, path, body, corsHeaders);
     if (path.startsWith("/audit-logs")) return await handleAuditLogs(client, method, path, body, corsHeaders);
     if (path.startsWith("/emails")) return await handleEmails(client, method, path, body, corsHeaders);
+    if (path.startsWith("/push-subscriptions")) return await handlePushSubscriptions(method, corsHeaders);
 
     return jsonResponse(404, { error: "Not Found" }, {}, corsHeaders);
 

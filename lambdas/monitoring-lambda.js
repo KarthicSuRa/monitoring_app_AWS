@@ -1,181 +1,179 @@
-
-import { Pool } from "pg";
-import { LambdaClient, InvokeCommand } from "@aws-sdk/client-lambda";
-
-const FAKE_USER_AGENT = "MCM Monitor Alerts";
-
-// The database pool is initialized lazily and reused across warm invocations.
+// monitoring-lambda.js
+// WHY CommonJS: AWS Lambda Node.js runtime uses CommonJS by default.
+// Using ESM (import/export) without "type":"module" causes a runtime crash.
+const { Pool } = require('pg');
+const { LambdaClient, InvokeCommand } = require('@aws-sdk/client-lambda');
+const FAKE_USER_AGENT = 'MCM Monitor Alerts';
 let pool;
-
-/**
- * Initializes the database connection pool using the DATABASE_URL environment variable.
- */
 function initializePool() {
-  if (pool) {
-    return; // Pool is already initialized
-  }
-
+  if (pool) return;
   const connectionString = process.env.DATABASE_URL;
-  if (!connectionString) {
-    throw new Error("DATABASE_URL environment variable is not set.");
-  }
-
+  if (!connectionString) throw new Error('DATABASE_URL environment variable is not set.');
   pool = new Pool({
-    connectionString: connectionString,
-    ssl: {
-      rejectUnauthorized: false // Adjust as required by your RDS SSL configuration
-    }
+    connectionString,
+    ssl: { rejectUnauthorized: false },
   });
 }
-
-const lambdaClient = new LambdaClient({ region: process.env.AWS_REGION });
-
-// Helper function to fetch data for a single site
+const lambdaClient = new LambdaClient({ region: process.env.AWS_REGION || 'ap-southeast-2' });
+// ─── Fetch single site data (API Gateway path) ───────────────────────────────
 const fetchSiteData = async (client, siteId) => {
-    const { rows: [monitoredSiteData] } = await client.query(
-        "SELECT * FROM monitored_sites WHERE id = $1",
-        [siteId]
-    );
-
-    if (!monitoredSiteData) {
-        return {
-            statusCode: 404,
-            headers: { 
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Headers": "Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token",
-                "Access-Control-Allow-Methods": "OPTIONS,GET"
-            },
-            body: JSON.stringify({ message: "Site not found" }),
-        };
-    }
-
-    const { rows: pingLogs } = await client.query(
-        "SELECT * FROM ping_logs WHERE site_id = $1 ORDER BY checked_at DESC",
-        [siteId]
-    );
-
+  const { rows: [site] } = await client.query(
+    'SELECT * FROM monitored_sites WHERE id = $1', [siteId]
+  );
+  if (!site) {
     return {
-        statusCode: 200,
-        headers: { 
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Headers": "Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token",
-            "Access-Control-Allow-Methods": "OPTIONS,GET"
-        },
-        body: JSON.stringify({
-            ...monitoredSiteData,
-            ping_logs: pingLogs,
-        }),
+      statusCode: 404,
+      headers: { 'Access-Control-Allow-Origin': '*' },
+      body: JSON.stringify({ message: 'Site not found' }),
     };
+  }
+  const { rows: pingLogs } = await client.query(
+    'SELECT * FROM ping_logs WHERE site_id = $1 ORDER BY checked_at DESC LIMIT 100',
+    [siteId]
+  );
+  return {
+    statusCode: 200,
+    headers: { 'Access-Control-Allow-Origin': '*' },
+    body: JSON.stringify({ ...site, ping_logs: pingLogs }),
+  };
 };
-
-
-// Main handler
-export const handler = async (event) => {
-    initializePool();
-    const client = await pool.connect();
-
-    try {
-        // API Gateway Request: Fetch single site data
-        if (event.queryStringParameters && event.queryStringParameters.siteId) {
-            console.log(`API request received for siteId: ${event.queryStringParameters.siteId}`);
-            return await fetchSiteData(client, event.queryStringParameters.siteId);
-        }
-
-        // Scheduled Task: Perform monitoring checks (Original Logic)
-        console.log("Scheduled monitoring task started.");
-        const { rows: sites } = await client.query(
-            "SELECT id, url, name, country, status FROM monitored_sites WHERE status = 'active' AND is_paused = false"
-        );
-
-        console.log(`Found ${sites.length} active sites to monitor.`);
-
-        const results = await Promise.all(
-            sites.map(async (site) => {
-                const start = Date.now();
-                let status_code = 0, is_up = false, response_time_ms = 0, status_text = "", error_message = null;
-
-                try {
-                    const response = await fetch(site.url, {
-                        method: "GET",
-                        headers: { "User-Agent": FAKE_USER_AGENT },
-                        redirect: "follow",
-                    });
-
-                    response_time_ms = Date.now() - start;
-                    status_code = response.status;
-                    status_text = response.statusText;
-                    is_up = response.ok;
-
-                    if (!is_up) {
-                        error_message = `Server responded with status: ${status_code} ${status_text}`;
-                    }
-                } catch (e) {
-                    response_time_ms = Date.now() - start;
-                    error_message = e.message;
-                    is_up = false;
-                }
-
-                return { site_id: site.id, is_up, response_time_ms, status_code, status_text, error_message };
-            })
-        );
-
-        if (results.length > 0) {
-            const insertQuery = `
-                INSERT INTO ping_logs 
-                (site_id, is_up, response_time_ms, status_code, status_text, error_message)
-                VALUES ${results.map((_, i) => `($${i * 6 + 1}, $${i * 6 + 2}, $${i * 6 + 3}, $${i * 6 + 4}, $${i * 6 + 5}, $${i * 6 + 6})`).join(",")}
-            `;
-            const values = results.flatMap((r) => [r.site_id, r.is_up, r.response_time_ms, r.status_code, r.status_text, r.error_message]);
-            await client.query(insertQuery, values);
-        }
-
-        const downSites = results.filter((r) => !r.is_up);
-
-        if (downSites.length > 0) {
-            await Promise.all(
-                downSites.map(async (result) => {
-                    const site = sites.find((s) => s.id === result.site_id);
-                    if (!site) return;
-
-                    const payload = {
-                        title: `Site Down Alert: ${site.name}`,
-                        message: `The monitored site \"${site.name}\" (${site.country || 'N/A'}) was detected as down. Error: ${result.error_message || "No details available."}`,
-                        severity: "high",
-                        type: "site_alert",
-                        site: site.name,
-                        topic_name: "Site Monitoring",
-                    };
-
-                    await lambdaClient.send(
-                        new InvokeCommand({
-                            FunctionName: process.env.NOTIFICATION_LAMBDA_NAME,
-                            InvocationType: "Event",
-                            Payload: Buffer.from(JSON.stringify(payload)),
-                        })
-                    );
-                })
-            );
-        }
-
-        return {
-            statusCode: 200,
-            body: JSON.stringify({ message: `Successfully checked ${sites.length} sites. Found ${downSites.length} down.` }),
-        };
-
-    } catch (error) {
-        console.error("Lambda execution failed:", error);
-        return {
-            statusCode: 500,
-            headers: {
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Headers": "Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token",
-                "Access-Control-Allow-Methods": "OPTIONS,GET"
-            },
-            body: JSON.stringify({ error: error.message }),
-        };
-    } finally {
-        if (client) {
-            client.release();
-        }
+// ─── Fire a site-down notification ──────────────────────────────────────────
+const fireDownAlert = async (client, site, errorMessage) => {
+  // ✅ DEDUPLICATION: If an unresolved site_alert for this site was created
+  // in the last 10 minutes, skip it — prevents 1 alert per minute spam.
+  const recent = await client.query(
+    `SELECT id FROM notifications
+     WHERE type = 'site_alert'
+       AND site = $1
+       AND status != 'resolved'
+       AND created_at > NOW() - INTERVAL '10 minutes'
+     LIMIT 1`,
+    [site.name]
+  );
+  if (recent.rows.length > 0) {
+    console.log(`⏭️  Skipping duplicate alert for ${site.name} (recent unresolved alert exists).`);
+    return;
+  }
+  console.log(`🚨 Firing down alert for site: ${site.name}`);
+  const notificationPayload = {
+    title: `🔴 Site Down: ${site.name}`,
+    message: `"${site.name}" (${site.country || 'Unknown region'}) is unreachable. Error: ${errorMessage || 'No details available.'}`,
+    severity: 'high',
+    type: 'site_alert',
+    site: site.name,
+    topic_name: 'Site Monitoring',
+  };
+  // ✅ FIXED: Wrap payload in API Gateway HTTP event format.
+  // notification-lambda reads event.httpMethod and JSON.parse(event.body).
+  // Previously this was a raw object — undefined httpMethod → Lambda returned 405/500.
+  const apiGatewayEvent = {
+    httpMethod: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'origin': process.env.CLOUDFRONT_URL || 'http://localhost:3000',
+    },
+    body: JSON.stringify(notificationPayload),
+  };
+  try {
+    const result = await lambdaClient.send(
+      new InvokeCommand({
+        FunctionName: process.env.NOTIFICATION_LAMBDA_NAME,
+        InvocationType: 'RequestResponse', // Wait so we can log errors
+        Payload: Buffer.from(JSON.stringify(apiGatewayEvent)),
+      })
+    );
+    const responsePayload = result.Payload
+      ? JSON.parse(Buffer.from(result.Payload).toString())
+      : null;
+    if (result.FunctionError) {
+      console.error(`❌ notification-lambda error for ${site.name}:`, responsePayload);
+    } else {
+      console.log(`✅ Alert fired for ${site.name}. Status: ${responsePayload?.statusCode}`);
     }
+  } catch (invokeErr) {
+    console.error(`❌ Failed to invoke notification-lambda for ${site.name}:`, invokeErr.message);
+  }
+};
+// ─── Scheduled monitoring check ─────────────────────────────────────────────
+const runMonitoringCheck = async (client) => {
+  // ✅ FIXED: Removed broken WHERE status = 'active' (column doesn't exist)
+  const { rows: sites } = await client.query(
+    `SELECT id, url, name, country FROM monitored_sites WHERE is_paused = false`
+  );
+  console.log(`🔍 Checking ${sites.length} active sites...`);
+  const results = await Promise.all(
+    sites.map(async (site) => {
+      const start = Date.now();
+      let status_code = 0, is_up = false, response_time_ms = 0,
+          status_text = '', error_message = null;
+      try {
+        const response = await fetch(site.url, {
+          method: 'GET',
+          headers: { 'User-Agent': FAKE_USER_AGENT },
+          redirect: 'follow',
+          signal: AbortSignal.timeout(15000), // ✅ 15s timeout
+        });
+        response_time_ms = Date.now() - start;
+        status_code = response.status;
+        status_text = response.statusText;
+        is_up = response.ok;
+        if (!is_up) error_message = `Server responded with status: ${status_code} ${status_text}`;
+      } catch (e) {
+        response_time_ms = Date.now() - start;
+        error_message = e.message;
+        is_up = false;
+      }
+      return { site, is_up, response_time_ms, status_code, status_text, error_message };
+    })
+  );
+  // Bulk insert all ping results
+  if (results.length > 0) {
+    const insertQuery = `
+      INSERT INTO ping_logs (site_id, is_up, response_time_ms, status_code, status_text, error_message)
+      VALUES ${results.map((_, i) =>
+        `($${i * 6 + 1}, $${i * 6 + 2}, $${i * 6 + 3}, $${i * 6 + 4}, $${i * 6 + 5}, $${i * 6 + 6})`
+      ).join(',')}
+    `;
+    const values = results.flatMap(r => [
+      r.site.id, r.is_up, r.response_time_ms, r.status_code, r.status_text, r.error_message
+    ]);
+    await client.query(insertQuery, values);
+  }
+  const downSites = results.filter(r => !r.is_up);
+  if (downSites.length > 0) {
+    console.log(`🚨 DOWN: ${downSites.map(r => r.site.name).join(', ')}`);
+    await Promise.all(downSites.map(r => fireDownAlert(client, r.site, r.error_message)));
+  } else {
+    console.log('✅ All sites are UP.');
+  }
+  return {
+    statusCode: 200,
+    body: JSON.stringify({
+      message: `Checked ${sites.length} sites. ${downSites.length} down.`,
+      down: downSites.map(r => r.site.name),
+    }),
+  };
+};
+// ─── Main Lambda Handler ─────────────────────────────────────────────────────
+// ✅ FIXED: CommonJS exports.handler (not ESM export const handler)
+exports.handler = async (event) => {
+  initializePool();
+  const client = await pool.connect();
+  try {
+    if (event.queryStringParameters?.siteId) {
+      console.log(`API request for siteId: ${event.queryStringParameters.siteId}`);
+      return await fetchSiteData(client, event.queryStringParameters.siteId);
+    }
+    console.log('Scheduled monitoring task started.');
+    return await runMonitoringCheck(client);
+  } catch (error) {
+    console.error('Lambda execution failed:', error);
+    return {
+      statusCode: 500,
+      headers: { 'Access-Control-Allow-Origin': '*' },
+      body: JSON.stringify({ error: error.message }),
+    };
+  } finally {
+    client.release();
+  }
 };

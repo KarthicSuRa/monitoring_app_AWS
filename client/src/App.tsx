@@ -43,10 +43,6 @@ import {
   sendTestAlert as apiSendTestAlert
 } from './lib/api';
 
-interface ExtendedNotification extends Notification {
-  oneSignalId?: string;
-}
-
 function App() {
   const [theme, setTheme] = useState<Theme>('light');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -55,9 +51,9 @@ function App() {
   const [snoozedUntil, setSnoozedUntil] = useState<Date | null>(null);
   const [isPushEnabled, setIsPushEnabled] = useState(false);
   const [isPushLoading, setIsPushLoading] = useState(false);
-  const [notifications, setNotifications] = useState<ExtendedNotification[]>([]);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
   const [topics, setTopics] = useState<Topic[]>([]);
-  const [toasts, setToasts] = useState<ExtendedNotification[]>([]);
+  const [toasts, setToasts] = useState<Notification[]>([]);
   const [authLoading, setAuthLoading] = useState(true);
   const [dataLoading, setDataLoading] = useState(true);
   const [sites, setSites] = useState<MonitoredSite[]>([]);
@@ -70,6 +66,8 @@ function App() {
   const location = useLocation();
   const oneSignalService = OneSignalService.getInstance();
   const dataFetched = useRef(false);
+  const pollingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lastNotificationIdRef = useRef<string | null>(null);
 
   const currentPage = useMemo(() => {
     const path = location.pathname;
@@ -86,7 +84,7 @@ function App() {
     return 'dashboard';
   }, [location.pathname]);
 
-  const addToast = useCallback((notification: ExtendedNotification) => {
+  const addToast = useCallback((notification: Notification) => {
     setToasts(prev => [{ ...notification, id: `toast-${notification.id}-${Date.now()}` }, ...prev]);
   }, []);
 
@@ -104,7 +102,7 @@ function App() {
     subscription: isPushEnabled ? 'Active' : 'Inactive',
   }), [isPushEnabled]);
 
-  const handleNewNotification = useCallback((notification: ExtendedNotification) => {
+  const handleNewNotification = useCallback((notification: Notification) => {
       console.log('🔔 Handling new notification:', notification.title);
       setNotifications(prev => [notification, ...prev]);
       addToast(notification);
@@ -182,6 +180,9 @@ function App() {
           setNotifications(notificationsData || []);
           setTopics(topicsData || []);
           setSites(sitesData || []);
+          if (notificationsData && notificationsData.length > 0) {
+            lastNotificationIdRef.current = notificationsData[0].id;
+          }
           console.log('✅ Initial data fetched successfully');
           dataFetched.current = true;
         } catch (error: any) {
@@ -197,6 +198,59 @@ function App() {
       fetchInitialData();
     }
   }, [profile]);
+
+  useEffect(() => {
+    if (!profile) return;
+    const waitForData = setInterval(() => {
+      if (!dataFetched.current) return;
+      clearInterval(waitForData);
+      let sitesTick = 0;
+      const poll = async () => {
+        if (document.visibilityState === 'hidden') return;
+        try {
+          const freshNotifications = await getNotifications();
+          if (freshNotifications && freshNotifications.length > 0) {
+            const latestId = freshNotifications[0].id;
+            if (lastNotificationIdRef.current && latestId !== lastNotificationIdRef.current) {
+              setNotifications(prev => {
+                const existingIds = new Set(prev.map((n: Notification) => n.id));
+                const brandNew = freshNotifications.filter(n => !existingIds.has(n.id));
+                brandNew.forEach(n => handleNewNotification(n as Notification));
+                return freshNotifications as Notification[];
+              });
+            }
+            lastNotificationIdRef.current = latestId;
+          }
+          sitesTick++;
+          if (sitesTick % 2 === 0) {
+            const freshSites = await getSites();
+            if (freshSites) setSites(freshSites);
+          }
+        } catch (err) {
+          console.warn('⚠️ Polling error:', err);
+        }
+      };
+      pollingIntervalRef.current = setInterval(poll, 30_000);
+      console.log('🔄 Real-time polling started (30s notifications / 60s sites)');
+      const onVisible = () => { if (document.visibilityState === 'visible') poll(); };
+      document.addEventListener('visibilitychange', onVisible);
+      return () => {
+        if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
+        document.removeEventListener('visibilitychange', onVisible);
+        console.log('⏹️ Polling stopped');
+      };
+    }, 500);
+    return () => clearInterval(waitForData);
+  }, [profile, handleNewNotification]);
+
+  useEffect(() => {
+    if (!profile) return;
+    oneSignalService.login(profile.id).catch((err) =>
+      console.error('❌ OneSignal login failed:', err)
+    );
+    oneSignalService.setupForegroundNotifications(handleNewNotification);
+    console.log('🔔 OneSignal foreground notification handler registered for user:', profile.id);
+  }, [profile, oneSignalService, handleNewNotification]);
 
   useEffect(() => {
     const checkSubscription = async () => {
@@ -246,15 +300,20 @@ function App() {
          cognitoUser.signOut();
        }
     } finally {
-        setProfile(null);
-        dataFetched.current = false;
-        setNotifications([]);
-        setTopics([]);
-        setSites([]);
-        setToasts([]);
-        setIsPushEnabled(false);
-        navigate('/');
-        console.log('➡️ Client-side logout complete');
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
+        pollingIntervalRef.current = null;
+      }
+      lastNotificationIdRef.current = null;
+      setProfile(null);
+      dataFetched.current = false;
+      setNotifications([]);
+      setTopics([]);
+      setSites([]);
+      setToasts([]);
+      setIsPushEnabled(false);
+      navigate('/');
+      console.log('➡️ Client-side logout complete');
     }
   }, [navigate, oneSignalService]);
 
@@ -272,16 +331,20 @@ function App() {
       console.log('✅ Test alert request sent successfully.');
       addToast({
         id: `local-${Date.now()}`,
-        title: "Test Alert Triggered",
-        message: "The test alert was successfully sent. You should receive a push notification and an in-app notification shortly.",
-        severity: 'info',
-        source: 'System',
+        title: 'Test Alert Triggered',
+        message: 'The test alert was successfully sent. You should receive a push notification and an in-app notification shortly.',
+        severity: 'low',                          // ✅ Valid: 'low' | 'medium' | 'high'
+        type: 'manual',                           // ✅ Required field
+        timestamp: new Date().toISOString(),      // ✅ Required field
+        site: null,                               // ✅ Required field (nullable)
+        comments: [],                             // ✅ Required field (array)
+        topic_id: null,                           // ✅ Required field (nullable)
+        status: 'new',
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
-        status: 'new',
-      } as ExtendedNotification);
+      } as Notification);
     } catch (error: any) {
-      console.error("❌ Failed to send test alert:", error);
+      console.error('❌ Failed to send test alert:', error);
       alert(`Failed to send test alert: ${error.message}`);
     }
   }, [addToast]);
