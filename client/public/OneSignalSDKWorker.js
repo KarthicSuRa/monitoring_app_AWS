@@ -1,12 +1,18 @@
-self.addEventListener('install', () => self.skipWaiting());
+self.addEventListener('install', (event) => {
+  event.waitUntil(self.skipWaiting());
+});
 
-/* MCM Alerts Native Service Worker (Integrated with OneSignal) */
-// MCM Alerts Logic: MUST be at the top to satisfy 'initial evaluation' checks.
+self.addEventListener('activate', (event) => {
+  event.waitUntil(self.clients.claim());
+});
+
 self.addEventListener('message', (event) => {
+    if (event.data?.type === 'SKIP_WAITING') {
+        self.skipWaiting();
+    }
     if (event.data?.type === 'CLEAR_BADGE') {
         if (navigator.clearAppBadge) navigator.clearAppBadge().catch(() => {});
     }
 });
 
-// Load OneSignal Logic AFTER our listeners are registered
 importScripts('https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.sw.js');

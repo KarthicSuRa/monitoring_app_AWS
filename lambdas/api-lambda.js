@@ -31,18 +31,25 @@ const jsonResponse = (statusCode, body, headers = {}, corsHeaders = {}) => ({
 let pool;
 const initializePool = () => {
   if (!pool) {
-    console.log("Initializing database connection pool...");
     const { DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD } = process.env;
+    // DIAG_DB_ENV: Log which env vars are present so you can spot missing ones in CloudWatch
+    console.log('[DIAG_DB_ENV] DB_HOST:', DB_HOST ? `SET (${DB_HOST})` : 'MISSING');
+    console.log('[DIAG_DB_ENV] DB_PORT:', DB_PORT ? `SET (${DB_PORT})` : 'MISSING');
+    console.log('[DIAG_DB_ENV] DB_NAME:', DB_NAME ? `SET (${DB_NAME})` : 'MISSING');
+    console.log('[DIAG_DB_ENV] DB_USER:', DB_USER ? `SET (${DB_USER})` : 'MISSING');
+    console.log('[DIAG_DB_ENV] DB_PASSWORD:', DB_PASSWORD ? 'SET (hidden)' : 'MISSING');
+    console.log('[DIAG_DB_ENV] COGNITO_USER_POOL_ID:', process.env.COGNITO_USER_POOL_ID ? 'SET' : 'MISSING');
+    console.log('[DIAG_DB_ENV] COGNITO_CLIENT_ID:', process.env.COGNITO_CLIENT_ID ? 'SET' : 'MISSING');
     if (!DB_HOST || !DB_PORT || !DB_NAME || !DB_USER || !DB_PASSWORD) {
-        console.error("FATAL: DB env vars not set.");
-        throw new Error("Database connection environment variables are not fully set.");
+        console.error('[DIAG_DB_ENV] FATAL: One or more required DB env vars are missing. Aborting pool creation.');
+        throw new Error('Database connection environment variables are not fully set.');
     }
     pool = new Pool({
         connectionString: `postgres://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}`,
         ssl: { rejectUnauthorized: false },
         connectionTimeoutMillis: 10000,
     });
-    console.log("Database pool created.");
+    console.log('[DIAG_DB_ENV] Database pool created successfully.');
   }
 };
 
@@ -54,16 +61,22 @@ const verifier = CognitoJwtVerifier.create({
 
 const authenticate = async (event) => {
   const authHeader = event.headers?.authorization || event.headers?.Authorization;
-  if (!authHeader) return { authenticated: false, error: "Missing Authorization header" };
-  const token = authHeader.split(" ")[1];
-  if (!token) return { authenticated: false, error: "Invalid token format" };
-
+  if (!authHeader) {
+    console.warn('[DIAG_AUTH] Missing Authorization header in request');
+    return { authenticated: false, error: 'Missing Authorization header' };
+  }
+  const token = authHeader.split(' ')[1];
+  if (!token) {
+    console.warn('[DIAG_AUTH] Authorization header present but token missing (bad format)');
+    return { authenticated: false, error: 'Invalid token format' };
+  }
   try {
     const payload = await verifier.verify(token);
+    console.log('[DIAG_AUTH] JWT verified OK for sub:', payload.sub);
     return { authenticated: true, user: { id: payload.sub, email: payload.email, app_role: payload['custom:app_role'] || 'member' } };
   } catch (error) {
-    console.error("JWT verification error:", error.message);
-    return { authenticated: false, error: "Invalid token" };
+    console.error('[DIAG_AUTH] JWT verification FAILED:', error.name, error.message);
+    return { authenticated: false, error: 'Invalid token' };
   }
 };
 
@@ -229,7 +242,63 @@ const handleNotifications = async (client, method, path, body, user, corsHeaders
                 'manual'
             ]
         );
-        return jsonResponse(201, rows[0], {}, corsHeaders);
+        const insertedNotification = rows[0];
+
+        // FIXED: Also send a real OneSignal push so 'Send Test Alert' validates the full pipeline.
+        // Broadcast to ALL active users (last_session within 30 days).
+        const oneSignalAppId = process.env.ONESIGNAL_APP_ID;
+        const oneSignalApiKey = process.env.ONESIGNAL_REST_API_KEY;
+        let pushResult = null;
+        if (oneSignalAppId && oneSignalApiKey) {
+            try {
+                const https = require('https');
+                const pushPayload = JSON.stringify({
+                    app_id: oneSignalAppId,
+                    filters: [{ field: 'last_session', relation: '>', hours_ago: '720' }],
+                    headings: { en: insertedNotification.title },
+                    contents: { en: insertedNotification.message },
+                    data: {
+                        notificationId: insertedNotification.id,
+                        severity: insertedNotification.severity,
+                        type: insertedNotification.type,
+                        site: null,
+                        topic_id: topicId,
+                        status: insertedNotification.status,
+                    },
+                });
+                const pushOptions = {
+                    hostname: 'onesignal.com',
+                    path: '/api/v1/notifications',
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Basic ${oneSignalApiKey}`,
+                        'Content-Length': Buffer.byteLength(pushPayload),
+                    },
+                };
+                pushResult = await new Promise((resolve) => {
+                    const req = https.request(pushOptions, (res) => {
+                        let data = '';
+                        res.on('data', chunk => data += chunk);
+                        res.on('end', () => { try { resolve(JSON.parse(data)); } catch { resolve(data); } });
+                    });
+                    req.on('error', (e) => {
+                        console.error('OneSignal push failed for test alert:', e.message);
+                        resolve(null);
+                    });
+                    req.write(pushPayload);
+                    req.end();
+                });
+                console.log('OneSignal push result for test alert:', JSON.stringify(pushResult));
+            } catch (pushErr) {
+                console.error('Failed to send OneSignal push for test alert:', pushErr.message);
+                // Non-fatal: DB record was already created
+            }
+        } else {
+            console.warn('ONESIGNAL_APP_ID or ONESIGNAL_REST_API_KEY not set — push skipped for test alert.');
+        }
+
+        return jsonResponse(201, { ...insertedNotification, push_notification: pushResult }, {}, corsHeaders);
     }
 
     if (notificationId) {
@@ -249,7 +318,10 @@ const handleNotifications = async (client, method, path, body, user, corsHeaders
         // GET /notifications/:id
         if (method === 'GET') {
             const notifQuery = client.query("SELECT * FROM public.notifications WHERE id = $1", [notificationId]);
-            const commentsQuery = client.query("SELECT c.id, c.text, c.created_at, u.full_name, u.email FROM public.comments c JOIN public.users u ON c.user_id = u.id WHERE c.notification_id = $1 ORDER BY c.created_at ASC", [notificationId]);
+            const commentsQuery = client.query(
+                "SELECT c.id, c.text, c.created_at, c.user_id FROM public.comments c WHERE c.notification_id = $1 ORDER BY c.created_at ASC",
+                [notificationId]
+            );
 
             const [notifResult, commentsResult] = await Promise.all([notifQuery, commentsQuery]);
 
@@ -258,7 +330,7 @@ const handleNotifications = async (client, method, path, body, user, corsHeaders
             }
 
             const notification = notifResult.rows[0];
-            notification.comments = commentsResult.rows;
+            notification.comments = commentsResult.rows.map(c => ({ ...c, user_full_name: null }));
 
             return jsonResponse(200, notification, {}, corsHeaders);
         }
@@ -283,44 +355,78 @@ const handleNotifications = async (client, method, path, body, user, corsHeaders
 
     // GET /notifications (list all)
     if (method === 'GET') {
-        const { rows } = await client.query(`
-            SELECT
-                n.id,
-                n.topic_id,
-                n.title,
-                n.message,
-                n.severity,
-                n.status,
-                n.type,
-                n.metadata,
-                n.created_at,
-                n.created_at AS timestamp,
-                n.updated_at,
-                COALESCE(
-                    JSON_AGG(
-                        JSON_BUILD_OBJECT(
-                            'id',              c.id,
-                            'text',            c.text,
-                            'user_id',         c.user_id,
-                            'created_at',      c.created_at,
-                            'user_full_name',  u.full_name
-                        ) ORDER BY c.created_at ASC
-                    ) FILTER (WHERE c.id IS NOT NULL),
-                    '[]'::json
-                ) AS comments
-            FROM public.notifications n
-            LEFT JOIN public.comments c ON c.notification_id = n.id
-            LEFT JOIN public.users u ON
-              CASE
-                WHEN c.user_id ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
-                THEN u.id = CAST(c.user_id AS UUID)
-                ELSE false
-              END
-            GROUP BY n.id
-            ORDER BY n.created_at DESC
-            LIMIT 200
-        `);
-        return jsonResponse(200, rows, {}, corsHeaders);
+        try {
+            // Step 1: Fetch notifications with comments — NO user JOIN to avoid UUID cast issues.
+            // user_full_name is resolved in a separate lightweight query below.
+            const { rows: notifications } = await client.query(`
+                SELECT
+                    n.id,
+                    n.topic_id,
+                    n.title,
+                    n.message,
+                    n.severity,
+                    n.status,
+                    n.type,
+                    n.metadata,
+                    n.created_at,
+                    n.created_at AS timestamp,
+                    n.updated_at,
+                    COALESCE(
+                        JSON_AGG(
+                            JSON_BUILD_OBJECT(
+                                'id',          c.id,
+                                'text',        c.text,
+                                'user_id',     c.user_id,
+                                'created_at',  c.created_at,
+                                'user_full_name', NULL
+                            ) ORDER BY c.created_at ASC
+                        ) FILTER (WHERE c.id IS NOT NULL),
+                        '[]'::json
+                    ) AS comments
+                FROM public.notifications n
+                LEFT JOIN public.comments c ON c.notification_id = n.id
+                GROUP BY n.id
+                ORDER BY n.created_at DESC
+                LIMIT 200
+            `);
+
+            // Step 2: Collect all unique user_ids from comments across all notifications,
+            // but only those that look like valid UUIDs — safe, no casting risk.
+            const uuidPattern = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+            const uniqueUserIds = [...new Set(
+                notifications.flatMap(n =>
+                    (n.comments || [])
+                        .map(c => c.user_id)
+                        .filter(id => id && uuidPattern.test(id))
+                )
+            )];
+
+            // Step 3: If there are any valid user IDs, fetch their names in one query.
+            let userMap = {};
+            if (uniqueUserIds.length > 0) {
+                const placeholders = uniqueUserIds.map((_, i) => `$${i + 1}`).join(', ');
+                const { rows: users } = await client.query(
+                    `SELECT id::text, full_name FROM public.users WHERE id = ANY(ARRAY[${placeholders}]::uuid[])`,
+                    uniqueUserIds
+                );
+                userMap = Object.fromEntries(users.map(u => [u.id, u.full_name]));
+            }
+
+            // Step 4: Merge user names into the comments.
+            const enriched = notifications.map(n => ({
+                ...n,
+                comments: (n.comments || []).map(c => ({
+                    ...c,
+                    user_full_name: userMap[c.user_id] || null,
+                })),
+            }));
+
+            return jsonResponse(200, enriched, {}, corsHeaders);
+        } catch (notifErr) {
+            // Surface the exact DB error in CloudWatch so you can diagnose it.
+            console.error('NOTIFICATIONS_QUERY_ERROR:', notifErr.message, notifErr.code, notifErr.detail);
+            throw notifErr; // Re-throw so the outer handler returns 500 with details in logs
+        }
     }
 
     return jsonResponse(405, { error: `Method ${method} Not Allowed on ${path}` }, {}, corsHeaders);
@@ -453,32 +559,46 @@ exports.handler = async (event) => {
   let client;
 
   try {
+    console.log(`[DIAG_REQUEST] ${event.httpMethod} ${event.path}`);
     initializePool();
+
+    console.log('[DIAG_POOL_CONNECT] Attempting DB connection...');
     client = await pool.connect();
+    console.log('[DIAG_POOL_CONNECT] DB connection acquired successfully.');
 
     const method = event.httpMethod;
     const path = event.path;
     const body = event.body ? JSON.parse(event.body) : {};
 
-    if (path.startsWith("/users")) return await handleUsers(client, method, path, body, user, corsHeaders);
-    if (path.startsWith("/teams")) return await handleTeams(client, method, path, body, user, corsHeaders);
-    if (path.startsWith("/sites")) return await handleSites(client, method, path, body, corsHeaders);
-    if (path.startsWith("/monitoring")) return await handleMonitoring(client, method, event, corsHeaders);
-    if (path.startsWith("/topics")) return await handleTopics(client, method, path, body, user, corsHeaders);
-    if (path.startsWith("/notifications")) return await handleNotifications(client, method, path, body, user, corsHeaders);
-    if (path.startsWith("/webhooks")) return await handleWebhooks(client, method, path, body, user, corsHeaders);
-    if (path.startsWith("/calendar")) return await handleCalendar(client, method, path, body, corsHeaders);
-    if (path.startsWith("/audit-logs")) return await handleAuditLogs(client, method, path, body, corsHeaders);
-    if (path.startsWith("/emails")) return await handleEmails(client, method, path, body, corsHeaders);
-    if (path.startsWith("/push-subscriptions")) return await handlePushSubscriptions(method, corsHeaders);
+    if (path.startsWith('/users'))             return await handleUsers(client, method, path, body, user, corsHeaders);
+    if (path.startsWith('/teams'))             return await handleTeams(client, method, path, body, user, corsHeaders);
+    if (path.startsWith('/sites'))             return await handleSites(client, method, path, body, corsHeaders);
+    if (path.startsWith('/monitoring'))        return await handleMonitoring(client, method, event, corsHeaders);
+    if (path.startsWith('/topics'))            return await handleTopics(client, method, path, body, user, corsHeaders);
+    if (path.startsWith('/notifications'))     return await handleNotifications(client, method, path, body, user, corsHeaders);
+    if (path.startsWith('/webhooks'))          return await handleWebhooks(client, method, path, body, user, corsHeaders);
+    if (path.startsWith('/calendar'))          return await handleCalendar(client, method, path, body, corsHeaders);
+    if (path.startsWith('/audit-logs'))        return await handleAuditLogs(client, method, path, body, corsHeaders);
+    if (path.startsWith('/emails'))            return await handleEmails(client, method, path, body, corsHeaders);
+    if (path.startsWith('/push-subscriptions')) return await handlePushSubscriptions(method, corsHeaders);
 
-    return jsonResponse(404, { error: "Not Found" }, {}, corsHeaders);
+    return jsonResponse(404, { error: 'Not Found' }, {}, corsHeaders);
 
   } catch (err) {
-    console.error("FATAL_ERROR in Lambda handler:", err);
-    // Sanitize error message for production
-    const errorMessage = process.env.NODE_ENV === 'production' ? "Internal Server Error" : err.message;
-    return jsonResponse(500, { error: "Internal Server Error", details: errorMessage }, {}, corsHeaders);
+    // DIAG_FATAL: Full error breakdown so CloudWatch shows the exact failure point
+    console.error('[DIAG_FATAL] Unhandled error in Lambda handler:');
+    console.error('[DIAG_FATAL] message:', err.message);
+    console.error('[DIAG_FATAL] name:   ', err.name);
+    console.error('[DIAG_FATAL] code:   ', err.code);    // PostgreSQL error code e.g. 42703 = column not found
+    console.error('[DIAG_FATAL] detail: ', err.detail);  // PostgreSQL detail e.g. 'Key (id)=(...) not present'
+    console.error('[DIAG_FATAL] hint:   ', err.hint);    // PostgreSQL hint
+    console.error('[DIAG_FATAL] stack:  ', err.stack);
+    return jsonResponse(500, {
+      error: 'Internal Server Error',
+      // Return the real error message (remove this line once issue is diagnosed)
+      details: err.message,
+      pg_code: err.code || null,
+    }, {}, corsHeaders);
   } finally {
     if (client) client.release();
   }
