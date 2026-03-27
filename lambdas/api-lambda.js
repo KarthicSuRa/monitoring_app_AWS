@@ -292,7 +292,6 @@ const handleNotifications = async (client, method, path, body, user, corsHeaders
                 n.severity,
                 n.status,
                 n.type,
-                n.site,
                 n.metadata,
                 n.created_at,
                 n.created_at AS timestamp,
