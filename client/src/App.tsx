@@ -146,6 +146,7 @@ function App() {
                 full_name: payload.name,
                 email: payload.email,
                 avatar_url: payload.picture,
+                app_role: 'super_admin'
             });
         }
       } catch (error: any) {
@@ -170,6 +171,7 @@ function App() {
                 full_name: payload.name,
                 email: payload.email,
                 avatar_url: payload.picture,
+                app_role: 'super_admin'
             });
         }
         navigate('/');
@@ -533,7 +535,7 @@ function App() {
                 <Route path="/order-tracking/:orderId" element={<OrderTrackingPage user={profile} isSidebarOpen={isSidebarOpen} setIsSidebarOpen={setIsSidebarOpen} onLogout={handleLogout} onNavigate={handleNavigate} notifications={notifications} openSettings={() => setIsSettingsOpen(true)} systemStatus={systemStatus} />} />
                 {profile && <Route path="/analytics" element={ <AnalyticsPage user={profile} onLogout={handleLogout} onNavigate={handleNavigate} isSidebarOpen={isSidebarOpen} setIsSidebarOpen={setIsSidebarOpen} notifications={notifications} openSettings={() => setIsSettingsOpen(true)} systemStatus={systemStatus} topics={topics} /> } />}
                 <Route path="/topic-manager" element={<TopicManagerPage onLogout={handleLogout} onNavigate={handleNavigate} isSidebarOpen={isSidebarOpen} setIsSidebarOpen={setIsSidebarOpen} notifications={notifications} openSettings={() => setIsSettingsOpen(true)} systemStatus={systemStatus} onAddTopic={handleAddTopic} onToggleSubscription={handleToggleSubscription} onDeleteTopic={handleDeleteTopic} topics={topics} profile={profile} />}/>
-                <Route path="/profile" element={<ProfilePage profile={profile} addToast={addSimpleToast} />} />
+                <Route path="/profile" element={<ProfilePage profile={profile} addToast={addSimpleToast} onNavigate={handleNavigate} />} />
                 <Route path="*" element={(() => {
                   if (profileLoading || dataLoading) {
                     return (

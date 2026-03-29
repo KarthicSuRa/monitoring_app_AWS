@@ -74,10 +74,10 @@ export const NotificationToast: React.FC<NotificationToastProps> = ({
           </div>
           {/* Notification content */}
           <div className="flex-1 min-w-0">
-            <p className={`text-sm font-semibold ${styles.title}`}>
+            <p className={`text-xs sm:text-sm font-semibold ${styles.title}`}>
               {notification.title}
             </p>
-            <p className="mt-0.5 text-sm text-gray-600 dark:text-gray-300 line-clamp-3">
+            <p className="mt-0.5 text-xs sm:text-sm text-gray-600 dark:text-gray-300 line-clamp-3">
               {notification.message}
             </p>
           </div>

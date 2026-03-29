@@ -148,15 +148,26 @@ export const Header: React.FC<HeaderProps> = ({
                 </button>
 
                 {isProfileOpen && (
-                  <div className="absolute right-0 mt-2 w-56 bg-card border border-border rounded-md shadow-lg py-2 z-10">
-                    <button
-                      onClick={onLogout}
-                      className="w-full text-left px-4 py-3 text-base text-foreground hover:bg-accent flex items-center gap-3"
-                    >
-                      <Icon name="log-out" className="w-5 h-5" />
-                      <span>Logout</span>
-                    </button>
-                  </div>
+                    <div className="absolute right-0 mt-2 w-56 bg-card border border-border rounded-md shadow-lg py-2 z-10">
+                        <div className="px-4 py-3 border-b border-border">
+                            <p className="text-sm font-semibold text-foreground truncate">{profile.full_name || 'User'}</p>
+                            <p className="text-sm text-muted-foreground truncate">{profile.email}</p>
+                        </div>
+                         <button
+                            onClick={() => { onNavigate('profile'); setProfileOpen(false); }}
+                            className="w-full text-left px-4 py-3 text-base text-foreground hover:bg-accent flex items-center gap-3"
+                        >
+                            <Icon name="user" className="w-5 h-5" />
+                            <span>Profile</span>
+                        </button>
+                        <button
+                            onClick={onLogout}
+                            className="w-full text-left px-4 py-3 text-base text-foreground hover:bg-accent flex items-center gap-3"
+                        >
+                            <Icon name="log-out" className="w-5 h-5" />
+                            <span>Logout</span>
+                        </button>
+                    </div>
                 )}
               </div>
             )}

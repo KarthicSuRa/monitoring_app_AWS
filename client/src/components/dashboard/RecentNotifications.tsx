@@ -182,8 +182,8 @@ export const RecentNotifications: React.FC<RecentNotificationsProps> = ({
                                             <Icon name={severityInfo.icon} className={`w-8 h-8 ${severityInfo.color}`} />
                                         </div>
                                         <div className="min-w-0">
-                                            <h4 className="font-semibold text-base text-foreground truncate pr-4">{n.title}</h4>
-                                            <p className="text-sm text-muted-foreground mt-1 truncate">{n.message || 'No message content'}</p>
+                                            <h4 className="font-semibold text-sm sm:text-base text-foreground truncate pr-4">{n.title}</h4>
+                                            <p className="text-xs sm:text-sm text-muted-foreground mt-1 truncate">{n.message || 'No message content'}</p>
                                             <div className="flex items-center gap-3 mt-3">
                                                 <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded-full ${statusInfo.bg} ${statusInfo.text} capitalize`}>
                                                     {n.status === 'new' && !isProcessing && <div className="w-2 h-2 rounded-full bg-destructive animate-blink"></div>}

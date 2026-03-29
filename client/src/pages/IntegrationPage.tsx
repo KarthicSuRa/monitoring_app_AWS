@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Header } from '../components/layout/Header';
 import { Icon } from '../components/ui/Icon';
+import { Button } from '../components/ui/Button';
 import { getTopics, getWebhookSources, addWebhookSource, deleteWebhookSource } from '../lib/api';
 import { type User, type Topic, type WebhookSource, type Notification } from '../types';
+import { format } from 'date-fns';
 
 interface IntegrationPageProps {
     user: User | null;
@@ -42,7 +44,7 @@ const IntegrationPage: React.FC<IntegrationPageProps> = (props) => {
         setIsLoading(true);
         try {
             const [sourcesData, topicsData] = await Promise.all([getWebhookSources(), getTopics()]);
-            setSources(sourcesData || []);
+            setSources(sourcesData ? sourcesData.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()) : []);
             setTopics(topicsData || []);
         } catch (error) {
             console.error("Failed to load integration data:", error);
@@ -106,122 +108,152 @@ const IntegrationPage: React.FC<IntegrationPageProps> = (props) => {
 
     const sourceTypeMap = useMemo(() => new Map(sourceTypes.map(st => [st.key, st])), []);
 
+    const renderTable = () => {
+        if (sources.length === 0) {
+            return (
+                <div className="text-center py-20 border-2 border-dashed border-border rounded-xl">
+                    <Icon name="webhook" className="mx-auto h-12 w-12 text-muted-foreground" />
+                    <h3 className="mt-4 text-lg font-semibold text-foreground">Your Integration Hub is Empty</h3>
+                    <p className="mt-2 text-sm text-muted-foreground">Get started by creating your first webhook integration.</p>
+                    <Button onClick={() => setIsCreating(true)} className="mt-6">
+                        <Icon name="plus" className="w-4 h-4 mr-2"/> Add Integration
+                    </Button>
+                </div>
+            );
+        }
+
+        return (
+             <div className="bg-card border dark:bg-gray-800 rounded-lg shadow border-border dark:border-gray-700 overflow-hidden">
+                <div className="overflow-x-auto">
+                    <table className="min-w-full divide-y divide-border dark:divide-gray-700">
+                        <thead className="bg-muted/50 dark:bg-gray-700">
+                            <tr>
+                                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase">Name</th>
+                                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase">Webhook URL</th>
+                                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase">Posts to Topic</th>
+                                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase">Created</th>
+                                <th scope="col" className="relative px-6 py-3">
+                                    <span className="sr-only">Actions</span>
+                                </th>
+                            </tr>
+                        </thead>
+                        <tbody className="bg-card dark:bg-gray-800 divide-y divide-border dark:divide-gray-700">
+                            {sources.map(source => {
+                                const typeInfo = sourceTypeMap.get(source.source_type) || sourceTypeMap.get('generic')!;
+                                const webhookUrl = getWebhookUrl(source.id);
+                                return (
+                                    <tr key={source.id}>
+                                        <td className="px-6 py-4 whitespace-nowrap">
+                                            <div className="flex items-center">
+                                                <div className={`w-10 h-10 rounded-lg ${typeInfo.color} bg-opacity-10 flex items-center justify-center mr-4`}>
+                                                    <Icon name={typeInfo.icon} className={`w-5 h-5 ${typeInfo.color}`} />
+                                                </div>
+                                                <div>
+                                                    <div className="text-sm font-medium text-foreground">{source.name}</div>
+                                                    <div className="text-sm text-muted-foreground">{source.description || typeInfo.name}</div>
+                                                </div>
+                                            </div>
+                                        </td>
+                                        <td className="px-6 py-4">
+                                             <div className="flex items-center gap-2">
+                                                <code className="text-sm font-mono text-primary/80 bg-muted p-2 rounded-md w-full max-w-xs overflow-x-auto">{
+                                                    webhookUrl.replace('https://','').split('?')[0] + '?source_id=...' + source.id.slice(-4)
+                                                }</code>
+                                                <Button variant="ghost" size="icon" onClick={() => copyToClipboard(webhookUrl, source.id)}>
+                                                    {copiedId === source.id ? <Icon name="check" className="w-4 h-4 text-green-500"/> : <Icon name="copy" className="w-4 h-4" />}
+                                                </Button>
+                                            </div>
+                                        </td>
+                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-muted-foreground">
+                                            {source.topic_id && topicMap.has(source.topic_id) ? (
+                                                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-secondary text-secondary-foreground">
+                                                    <Icon name="tag" className="w-3 h-3 mr-1.5"/>
+                                                    {topicMap.get(source.topic_id)}
+                                                </span>
+                                            ) : 'Uncategorized'}
+                                        </td>
+                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-muted-foreground">
+                                            {format(new Date(source.created_at), 'MMM d, yyyy')}
+                                        </td>
+                                        <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                                            <Button variant="ghost" size="icon" onClick={() => handleDelete(source.id)} className="text-muted-foreground hover:text-red-500">
+                                                <Icon name="trash-2" className="w-4 h-4"/>
+                                            </Button>
+                                        </td>
+                                    </tr>
+                                );
+                            })}
+                        </tbody>
+                    </table>
+                 </div>
+            </div>
+        );
+    };
+
     return (
-        <div className="flex-1 flex flex-col h-screen bg-background text-foreground">
+        <>
              <Header {...props} profile={props.user} title="Integrations" />
-            <main className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8">
-                <div className="max-w-6xl mx-auto"> 
-                    <h1 className="text-3xl font-bold mb-2">Integration Hub</h1>
-                    <p className="text-muted-foreground mb-8">Connect your tools, amplify your signals. The MCM Integration Hub provides a central place to manage incoming webhooks.</p>
-
-                    {isLoading ? (
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                           {[...Array(3)].map((_, i) => (
-                               <div key={i} className="h-48 bg-card border border-border rounded-[2rem] p-8 animate-pulse"></div>
-                           ))}
+            <main className="flex-1 overflow-y-auto bg-background md:ml-72">
+                <div className="max-w-7xl mx-auto p-4 md:p-6 lg:p-8">
+ 
+                    <div className="flex items-center justify-between mb-6">
+                        <div>
+                            <h1 className="text-3xl font-bold">Integration Hub</h1>
+                            <p className="text-muted-foreground mt-1">Connect your tools, amplify your signals. Manage incoming webhooks.</p>
                         </div>
-                    ) : (
-                       <> 
                         {!isCreating && (
-                             <button onClick={() => setIsCreating(true)} className="btn btn-primary mb-8">
+                             <Button onClick={() => setIsCreating(true)}>
                                 <Icon name="plus" className="w-4 h-4 mr-2"/> Add New Integration
-                            </button>
+                            </Button>
                         )}
+                    </div>
 
-                        {isCreating && (
-                             <div className="bg-card border border-border rounded-[2rem] mb-8">
-                                <form onSubmit={handleCreate} className="p-6 md:p-8">
-                                    <h3 className="font-semibold text-xl mb-6">New Webhook Integration</h3>
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                        <div className="md:col-span-2">
-                                            <label htmlFor="name" className="label">Integration Name</label>
-                                            <input id="name" type="text" value={formName} onChange={e => setFormName(e.target.value)} placeholder="e.g., Production API Alerts" className="input" required/>
-                                        </div>
-                                        <div className="md:col-span-2">
-                                            <label htmlFor="description" className="label">Description (Optional)</label>
-                                            <textarea id="description" value={formDescription} onChange={e => setFormDescription(e.target.value)} placeholder="A brief summary of what this integration is for." className="input h-24"></textarea>
-                                        </div>
-                                        <div>
-                                            <label htmlFor="source_type" className="label">Source Type</label>
-                                            <select id="source_type" value={formType} onChange={e => setFormType(e.target.value)} className="input">
-                                                {sourceTypes.map(st => <option key={st.key} value={st.key}>{st.name}</option>)}
-                                            </select>
-                                        </div>
-                                        <div>
-                                            <label htmlFor="topic_id" className="label">Post to Topic</label>
-                                            <select id="topic_id" value={formTopicId} onChange={e => setFormTopicId(e.target.value)} className="input">
-                                                <option value="">Default (Uncategorized)</option>
-                                                {topics.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                                            </select>
-                                        </div>
+                    {isCreating && (
+                         <div className="bg-card border border-border rounded-xl mb-8">
+                            <form onSubmit={handleCreate} className="p-6 md:p-8">
+                                <h3 className="font-semibold text-xl mb-6">New Webhook Integration</h3>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    <div className="md:col-span-2">
+                                        <label htmlFor="name" className="label">Integration Name</label>
+                                        <input id="name" type="text" value={formName} onChange={e => setFormName(e.target.value)} placeholder="e.g., Production API Alerts" className="input" required/>
                                     </div>
-                                    <div className="flex justify-end gap-3 mt-8">
-                                        <button type="button" onClick={() => setIsCreating(false)} className="btn btn-secondary">Cancel</button>
-                                        <button type="submit" className="btn btn-primary" disabled={isSubmitting || !formName}>
-                                            {isSubmitting ? <div className="spinner-xs"/> : 'Create Integration'}
-                                        </button>
+                                    <div className="md:col-span-2">
+                                        <label htmlFor="description" className="label">Description (Optional)</label>
+                                        <textarea id="description" value={formDescription} onChange={e => setFormDescription(e.target.value)} placeholder="A brief summary of what this integration is for." className="input h-24"></textarea>
                                     </div>
-                                </form>
-                            </div>
-                        )}
-
-                        {sources.length === 0 && !isCreating ? (
-                               <div className="text-center py-20 border-2 border-dashed border-border rounded-xl">
-                                   <Icon name="webhook" className="mx-auto h-12 w-12 text-muted-foreground" />
-                                   <h3 className="mt-4 text-lg font-semibold text-foreground">Your Integration Hub is Empty</h3>
-                                   <p className="mt-2 text-sm text-muted-foreground">Get started by creating your first webhook integration.</p>
-                                    <button onClick={() => setIsCreating(true)} className="btn btn-primary mt-6">
-                                        <Icon name="plus" className="w-4 h-4 mr-2"/> Add Integration
-                                    </button>
-                               </div>
-                        ) : (
-                             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                                {sources.map(source => {
-                                    const typeInfo = sourceTypeMap.get(source.source_type) || sourceTypeMap.get('generic')!;
-                                    const webhookUrl = getWebhookUrl(source.id);
-                                    return (
-                                        <div key={source.id} className="group bg-card border border-border rounded-[2rem] p-6 hover:shadow-xl transition-all relative flex flex-col">
-                                            <div className="flex-grow">
-                                                <div className="flex items-start justify-between">
-                                                    <div className={`w-14 h-14 rounded-2xl ${typeInfo.color} bg-opacity-10 flex items-center justify-center`}>
-                                                        <Icon name={typeInfo.icon} className={`w-7 h-7 ${typeInfo.color}`} />
-                                                    </div>
-                                                    <button onClick={() => handleDelete(source.id)} className="btn btn-xs btn-ghost text-muted-foreground hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity">
-                                                        <Icon name="trash-2" className="w-4 h-4"/>
-                                                    </button>
-                                                </div>
-                                                <h3 className="text-xl font-bold mt-4 mb-2">{source.name}</h3>
-                                                <p className="text-sm text-muted-foreground mb-4 h-10">{source.description || `Accepts ${typeInfo.name} payloads.`}</p>
-                                            </div>
-                                            
-                                            <div className="mt-auto">
-                                                {source.topic_id && topicMap.has(source.topic_id) && (
-                                                    <div className="mb-3 text-xs text-muted-foreground flex items-center gap-2">
-                                                        <Icon name="tag" className="w-3 h-3"/>
-                                                        Posts to: <span className="font-semibold text-foreground">{topicMap.get(source.topic_id)}</span>
-                                                    </div>
-                                                )}
-
-                                                <label className="text-xs font-semibold text-muted-foreground">Webhook URL</label>
-                                                <div className="flex items-center gap-2 mt-1">
-                                                    <code className="text-[11px] font-mono whitespace-nowrap overflow-x-auto text-primary/80 bg-muted p-2 rounded-md w-full">
-                                                        {webhookUrl}
-                                                    </code>
-                                                    <button onClick={() => copyToClipboard(webhookUrl, source.id)} className="btn btn-sm btn-ghost flex-shrink-0">
-                                                        {copiedId === source.id ? <Icon name="check" className="w-4 h-4 text-green-500"/> : <Icon name="copy" className="w-4 h-4" />}
-                                                    </button>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    );
-                                })}
-                            </div>
-                        )}
-                       </>
+                                    <div>
+                                        <label htmlFor="source_type" className="label">Source Type</label>
+                                        <select id="source_type" value={formType} onChange={e => setFormType(e.target.value)} className="input">
+                                            {sourceTypes.map(st => <option key={st.key} value={st.key}>{st.name}</option>)}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label htmlFor="topic_id" className="label">Post to Topic</label>
+                                        <select id="topic_id" value={formTopicId} onChange={e => setFormTopicId(e.target.value)} className="input">
+                                            <option value="">Default (Uncategorized)</option>
+                                            {topics.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                                        </select>
+                                    </div>
+                                </div>
+                                <div className="flex justify-end gap-3 mt-8">
+                                    <Button type="button" variant="secondary" onClick={() => setIsCreating(false)}>Cancel</Button>
+                                    <Button type="submit" disabled={isSubmitting || !formName}>
+                                        {isSubmitting ? <><Icon name="loader-2" className="w-4 h-4 animate-spin mr-2"/> Creating...</> : 'Create Integration'}
+                                    </Button>
+                                </div>
+                            </form>
+                        </div>
                     )}
+                    
+                    {isLoading ? (
+                        <div className="text-center py-20">
+                            <Icon name="loader-2" className="mx-auto h-12 w-12 text-muted-foreground animate-spin" />
+                            <p className="mt-4 text-muted-foreground">Loading integrations...</p>
+                        </div>
+                    ) : renderTable() }
                 </div>
             </main>
-        </div>
+        </>
     );
 };
 

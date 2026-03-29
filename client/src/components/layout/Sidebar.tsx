@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { Icon } from '../ui/Icon';
 import { Topic } from '../../types';
@@ -124,18 +123,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     {navItems.map(item => (
                         <NavItem key={item.name} item={item} currentPage={currentPage} onNavigate={onNavigate} />
                     ))}
-                     <a
-                        href="#"
-                        onClick={(e) => { e.preventDefault(); onNavigate('profile'); }}
-                        className={`flex items-center gap-4 rounded-md px-3 py-3 text-base font-medium transition-all ${
-                            currentPage === 'profile'
-                                ? 'bg-slate-800 text-white'
-                                : 'hover:bg-slate-700/50 hover:text-white'
-                        }`}
-                    >
-                        <Icon name="user" className="h-6 w-6" />
-                        Profile
-                    </a>
                     {profile && profile.app_role === 'super_admin' && (
                         <a
                             href="#"

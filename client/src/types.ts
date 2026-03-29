@@ -9,6 +9,13 @@ export interface User {
   full_name?: string;
   avatar_url?: string;
   app_role?: string;
+  notification_preferences?: {
+    [key: string]: boolean;
+  };
+  team?: {
+    id: string;
+    name: string;
+  } | null;
 }
 
 export type Theme = 'light' | 'dark';

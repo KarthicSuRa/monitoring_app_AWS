@@ -35,7 +35,7 @@ const CodeBlock: React.FC<{ code: string, lang?: string }> = ({ code, lang = 'js
 };
 
 export const ApiDocsPage: React.FC<ApiDocsPageProps> = ({ onNavigate, onLogout, isSidebarOpen, setIsSidebarOpen, notifications, openSettings, systemStatus, user }) => {
-  const endpointUrl = 'https://<YOUR_API_ID>.execute-api.<REGION>.amazonaws.com/prod/notifications';
+  const endpointUrl = import.meta.env.VITE_API_URL || 'https://<YOUR_API_ID>.execute-api.<REGION>.amazonaws.com/prod';
 
   const requestExample = JSON.stringify({
       topic_id: "t_123456789",
@@ -49,9 +49,9 @@ export const ApiDocsPage: React.FC<ApiDocsPageProps> = ({ onNavigate, onLogout, 
       }
   }, null, 2);
 
-  const curlExample = `curl -X POST ${endpointUrl} \
+  const curlExample = `curl -X POST ${endpointUrl}/notifications \
      -H "Content-Type: application/json" \
-     -H "x-api-key: <YOUR_API_KEY>" \
+     -H "Authorization: Bearer <YOUR_JWT_TOKEN>" \
      -d '${JSON.stringify({
         topic_id: "t_123456789",
         severity: "high",
@@ -82,22 +82,22 @@ export const ApiDocsPage: React.FC<ApiDocsPageProps> = ({ onNavigate, onLogout, 
                             <div className="flex gap-2 flex-wrap">
                                  <span className="px-3 py-1 text-xs font-medium rounded-full bg-primary/10 text-primary">REST API</span>
                                  <span className="px-3 py-1 text-xs font-medium rounded-full bg-green-500/10 text-green-600">JSON</span>
-                                 <span className="px-3 py-1 text-xs font-medium rounded-full bg-yellow-500/10 text-yellow-600">API Key</span>
+                                 <span className="px-3 py-1 text-xs font-medium rounded-full bg-purple-500/10 text-purple-600">JWT Auth</span>
                             </div>
                         </div>
 
                         <div className="p-6 bg-card rounded-xl border">
                              <h2 className="text-xl font-semibold mb-3">Authentication</h2>
                              <p className="text-muted-foreground mb-4">
-                                 API requests are authenticated using an API key passed in the request headers. You can generate and manage your API keys in the settings.
+                                 API requests are authenticated using a JSON Web Token (JWT) from AWS Cognito. Include the token in the `Authorization` header.
                              </p>
-                            <CodeBlock code={'x-api-key: <YOUR_API_KEY>'} lang="text" />
+                            <CodeBlock code={'Authorization: Bearer <YOUR_JWT_TOKEN>'} lang="text" />
                         </div>
 
                         <div className="p-6 bg-card rounded-xl border">
                             <h2 className="text-xl font-semibold mb-3">Endpoint</h2>
                             <div className="relative bg-muted p-4 rounded-md">
-                                <code className="text-sm"><span className="font-bold text-green-500">POST</span> {endpointUrl}</code>
+                                <code className="text-sm"><span className="font-bold text-green-500">POST</span> {endpointUrl}/notifications</code>
                             </div>
                         </div>
                         
@@ -134,7 +134,7 @@ export const ApiDocsPage: React.FC<ApiDocsPageProps> = ({ onNavigate, onLogout, 
                                      <ul className="list-disc list-inside text-muted-foreground mt-1 space-y-2">
                                         <li><span className="font-mono text-green-500">200 OK</span>: Success</li>
                                         <li><span className="font-mono text-yellow-500">400 Bad Request</span>: Missing fields or invalid data.</li>
-                                        <li><span className="font-mono text-orange-500">403 Forbidden</span>: Invalid API Key.</li>
+                                        <li><span className="font-mono text-orange-500">403 Forbidden</span>: Invalid JWT Token.</li>
                                         <li><span className="font-mono text-red-500">500 Server Error</span>: Internal server error.</li>
                                     </ul>
                                 </div>
