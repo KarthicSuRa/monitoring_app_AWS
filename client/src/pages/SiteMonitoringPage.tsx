@@ -8,7 +8,7 @@ import SiteMap from '../components/monitoring/SiteMap';
 import { AddSiteModal } from '../components/monitoring/AddSiteModal';
 import { Button } from '../components/ui/Button';
 import { type Notification, type SystemStatusData, type User, type MonitoredSite } from '../types';
-import { getSites, addSite, deleteSite } from '../lib/api';
+import { getSites, addSite, deleteSite, triggerMonitoring } from '../lib/api';
 
 interface SiteMonitoringPageProps {
   onLogout: () => Promise<void>;
@@ -98,6 +98,15 @@ export const SiteMonitoringPage: React.FC<SiteMonitoringPageProps> = ({
       // Optionally, show an error message to the user
     }
   };
+  
+  const handleTriggerMonitoring = async () => {
+    try {
+      await triggerMonitoring();
+      fetchSites();
+    } catch (error) {
+      console.error('Failed to trigger monitoring', error);
+    }
+  };
 
   const { filteredSites, mapCenter, mapZoom } = useMemo(() => {
       const safeSites = Array.isArray(sites) ? sites : [];
@@ -144,6 +153,7 @@ export const SiteMonitoringPage: React.FC<SiteMonitoringPageProps> = ({
               <p className="text-sm text-muted-foreground mt-1">Track the real-time status and performance of your websites and services.</p>
             </div>
             <div className="flex gap-2">
+              <Button onClick={handleTriggerMonitoring} className="w-full sm:w-auto">Trigger Check</Button>
               <Button onClick={() => setIsAddSiteModalOpen(true)} className="w-full sm:w-auto">Add New Site</Button>
             </div>
           </div>

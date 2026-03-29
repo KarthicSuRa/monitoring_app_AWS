@@ -72,7 +72,7 @@ export default function SiteMap({ sites, loading, error, center, zoom }: SiteMap
                               Status: {site.status}
                           </span><br/>
                           <span className="text-gray-500 dark:text-gray-400">
-                              Last Checked: {site.last_checked ? format(parseISO(site.last_checked), 'Pp') : 'N/A'}
+                              Last Checked: {site.latest_ping?.checked_at ? format(parseISO(site.latest_ping.checked_at), 'Pp') : 'N/A'}
                           </span>
                       </div>
                   </Popup>

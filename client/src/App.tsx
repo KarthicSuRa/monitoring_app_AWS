@@ -21,12 +21,13 @@ import { Sidebar } from './components/layout/Sidebar';
 import IntegrationPage from './pages/IntegrationPage';
 import { SettingsModal } from './components/layout/SettingsModal';
 import { NotificationToast } from './components/ui/NotificationToast';
-import { Theme, type Notification, SystemStatusData, NotificationUpdatePayload, Topic, MonitoredSite, User, Comment } from './types';
+import { Theme, type Notification, SystemStatusData, NotificationUpdatePayload, Topic, MonitoredSite, User, Comment, Severity } from './types';
 import { OneSignalService } from './lib/oneSignalService';
 import { ThemeContext } from './contexts/ThemeContext';
 import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import { SiteDetailPage } from './pages/monitoring/SiteDetailPage';
 import UserManagementPage from './pages/UserManagementPage';
+import ProfilePage from './pages/Profile';
 import SyntheticMonitoringPage from './pages/monitoring/SyntheticMonitoringPage';
 import ErrorBoundary from './components/ui/ErrorBoundary';
 import { getCurrentUser, userPool } from './lib/cognitoClient';
@@ -87,6 +88,21 @@ function App() {
   const addToast = useCallback((notification: Notification) => {
     setToasts(prev => [{ ...notification, id: `toast-${notification.id}-${Date.now()}` }, ...prev]);
   }, []);
+
+  const addSimpleToast = useCallback((toast: { id: string; title: string; message: string; severity: Severity; }) => {
+    const notification: Notification = {
+        ...toast,
+        type: 'local',
+        status: 'new',
+        timestamp: new Date().toISOString(),
+        site: null,
+        comments: [],
+        topic_id: null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+    };
+    addToast(notification);
+}, [addToast]);
 
   const removeToast = useCallback((id: string) => {
     setToasts(prev => prev.filter(t => t.id !== id));
@@ -178,7 +194,8 @@ function App() {
           ]);
           
           setNotifications(notificationsData || []);
-          setTopics(topicsData || []);
+          const mappedTopics = topicsData.map((t: any) => ({ ...t, subscribed: t.is_subscribed }));
+          setTopics(mappedTopics || []);
           setSites(sitesData || []);
           if (notificationsData && notificationsData.length > 0) {
             lastNotificationIdRef.current = notificationsData[0].id;
@@ -391,11 +408,12 @@ function App() {
   }, []);
 
   const handleToggleSubscription = useCallback(async (topic: Topic) => {
-    setTopics(prev => prev.map(t => t.id === topic.id ? { ...t, subscribed: !t.subscribed } : t));
+    const isSubscribing = !topic.subscribed;
+    setTopics(prev => prev.map(t => t.id === topic.id ? { ...t, subscribed: isSubscribing } : t));
     try {
       await toggleTopicSubscription(topic.id);
       if (isPushEnabled) {
-        if (topic.subscribed) {
+        if (!isSubscribing) {
           oneSignalService.removeUserTags([`topic_${topic.id}`]);
         } else {
           oneSignalService.setUserTags({ [`topic_${topic.id}`]: '1' });
@@ -404,7 +422,7 @@ function App() {
     } catch (error: any) {
       console.error('Error toggling subscription:', error);
       alert('Failed to update subscription. Please try again.');
-      setTopics(prev => prev.map(t => t.id === topic.id ? { ...t, subscribed: !t.subscribed } : t));
+      setTopics(prev => prev.map(t => t.id === topic.id ? { ...t, subscribed: !isSubscribing } : t));
     }
   }, [isPushEnabled, oneSignalService]);
 
@@ -515,7 +533,7 @@ function App() {
                 <Route path="/order-tracking/:orderId" element={<OrderTrackingPage user={profile} isSidebarOpen={isSidebarOpen} setIsSidebarOpen={setIsSidebarOpen} onLogout={handleLogout} onNavigate={handleNavigate} notifications={notifications} openSettings={() => setIsSettingsOpen(true)} systemStatus={systemStatus} />} />
                 {profile && <Route path="/analytics" element={ <AnalyticsPage user={profile} onLogout={handleLogout} onNavigate={handleNavigate} isSidebarOpen={isSidebarOpen} setIsSidebarOpen={setIsSidebarOpen} notifications={notifications} openSettings={() => setIsSettingsOpen(true)} systemStatus={systemStatus} topics={topics} /> } />}
                 <Route path="/topic-manager" element={<TopicManagerPage onLogout={handleLogout} onNavigate={handleNavigate} isSidebarOpen={isSidebarOpen} setIsSidebarOpen={setIsSidebarOpen} notifications={notifications} openSettings={() => setIsSettingsOpen(true)} systemStatus={systemStatus} onAddTopic={handleAddTopic} onToggleSubscription={handleToggleSubscription} onDeleteTopic={handleDeleteTopic} topics={topics} profile={profile} />}/>
-                
+                <Route path="/profile" element={<ProfilePage profile={profile} addToast={addSimpleToast} />} />
                 <Route path="*" element={(() => {
                   if (profileLoading || dataLoading) {
                     return (

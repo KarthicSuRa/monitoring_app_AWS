@@ -14,7 +14,7 @@ interface EventModalProps {
 export const EventModal: React.FC<EventModalProps> = ({ isOpen, onClose, event, onSave, onDelete, categories }) => {
   const [formData, setFormData] = useState({
     title: '',
-    subtitle: '',
+    description: '',
     category: '',
     color: 'blue',
   });
@@ -23,14 +23,14 @@ export const EventModal: React.FC<EventModalProps> = ({ isOpen, onClose, event, 
     if (event) {
       setFormData({
         title: event.title || '',
-        subtitle: event.subtitle || '',
+        description: event.description || '',
         category: event.category || (categories.length > 0 ? categories[0].name : ''),
         color: event.color || 'blue',
       });
     } else {
       setFormData({
         title: '',
-        subtitle: '',
+        description: '',
         category: categories.length > 0 ? categories[0].name : '',
         color: 'blue',
       });
@@ -41,7 +41,7 @@ export const EventModal: React.FC<EventModalProps> = ({ isOpen, onClose, event, 
 
   const isNewEvent = !event?.id;
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
     setFormData(prev => ({ ...prev, [name]: value }));
   };
@@ -50,7 +50,8 @@ export const EventModal: React.FC<EventModalProps> = ({ isOpen, onClose, event, 
     e.preventDefault();
     const newEventData = {
       ...formData,
-      date: event?.date || new Date().toISOString(),
+      start: event?.start || new Date().toISOString(),
+      allDay: true,
     };
     onSave(newEventData);
   };
@@ -72,8 +73,8 @@ export const EventModal: React.FC<EventModalProps> = ({ isOpen, onClose, event, 
               <input type="text" name="title" id="title" value={formData.title} onChange={handleChange} className="w-full px-3 py-2 rounded-md border" />
             </div>
             <div>
-              <label htmlFor="subtitle" className="block text-sm font-medium mb-1">Subtitle</label>
-              <input type="text" name="subtitle" id="subtitle" value={formData.subtitle} onChange={handleChange} className="w-full px-3 py-2 rounded-md border" />
+              <label htmlFor="description" className="block text-sm font-medium mb-1">Description</label>
+              <textarea name="description" id="description" value={formData.description} onChange={handleChange} className="w-full px-3 py-2 rounded-md border" />
             </div>
             <div>
               <label htmlFor="category" className="block text-sm font-medium mb-1">Category</label>

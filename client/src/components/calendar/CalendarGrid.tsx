@@ -1,4 +1,3 @@
-
 import React from 'react';
 import { CalendarEvent } from '../../types';
 import { Icon } from '../ui/Icon';
@@ -13,12 +12,20 @@ interface CalendarGridProps {
 }
 
 const EventCard: React.FC<{ event: CalendarEvent, onClick: (event: CalendarEvent) => void }> = ({ event, onClick }) => {
+  const getTeamColor = (team?: string) => {
+    if (team === 'CapG') return 'blue';
+    if (team === 'Gspann') return 'green';
+    return 'yellow'; // Default color
+  }
+
+  const teamColor = getTeamColor(event.team);
+
   const bgColor = {
     green: 'bg-green-100 border-green-300 text-green-800 dark:bg-green-900/50 dark:border-green-700 dark:text-green-200',
     red: 'bg-red-100 border-red-300 text-red-800 dark:bg-red-900/50 dark:border-red-700 dark:text-red-200',
     blue: 'bg-cyan-100 border-cyan-300 text-cyan-800 dark:bg-cyan-900/50 dark:border-cyan-700 dark:text-cyan-200',
     yellow: 'bg-amber-100 border-amber-300 text-amber-800 dark:bg-amber-900/50 dark:border-amber-700 dark:text-amber-200',
-  }[event.color || 'blue'];
+  }[teamColor];
 
   const handleEventClick = (e: React.MouseEvent) => {
     e.stopPropagation(); // Prevent the day click from firing
@@ -28,7 +35,7 @@ const EventCard: React.FC<{ event: CalendarEvent, onClick: (event: CalendarEvent
   return (
     <div onClick={handleEventClick} className={`p-1.5 rounded-md border text-xs font-semibold mb-1 cursor-pointer hover:opacity-80 transition-opacity ${bgColor}`}>
       <p>{event.title}</p>
-      {event.subtitle && <p className="font-normal opacity-80">{event.subtitle}</p>}
+      {event.team && <p className="font-normal opacity-80">{event.team}</p>}
     </div>
   )
 }
@@ -71,7 +78,7 @@ export const CalendarGrid: React.FC<CalendarGridProps> = ({ currentDate, events,
         ))}
 
         {days.map(day => {
-          const dayEvents = events.filter(e => format(new Date(e.date), 'yyyy-MM-dd') === format(day, 'yyyy-MM-dd'));
+          const dayEvents = events.filter(e => format(new Date(e.start), 'yyyy-MM-dd') === format(day, 'yyyy-MM-dd'));
           return (
             <div key={day.toString()} onClick={() => onDayClick(day)} className={`relative h-36 p-2 border-r border-b border-gray-200 dark:border-slate-700 cursor-pointer transition-colors hover:bg-gray-50 dark:hover:bg-slate-800/50 ${
               !isSameMonth(day, monthStart) ? 'bg-gray-50/50 dark:bg-slate-800/20' : 'bg-white dark:bg-slate-900'

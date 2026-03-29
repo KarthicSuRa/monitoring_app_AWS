@@ -84,6 +84,40 @@ const authenticate = async (event) => {
 //  API HANDLERS
 // =============================================================
 
+const handleProfile = async (client, method, body, user, corsHeaders) => {
+    if (method === 'GET') {
+        const { rows } = await client.query(
+            "SELECT id, full_name, email, app_role FROM public.users WHERE id = $1",
+            [user.id]
+        );
+        if (rows.length === 0) {
+            // Optionally create a profile if it doesn't exist
+            const { rows: newRows } = await client.query(
+                "INSERT INTO public.users (id, email, app_role) VALUES ($1, $2, $3) RETURNING id, full_name, email, app_role",
+                [user.id, user.email, user.app_role || 'member']
+            );
+            return jsonResponse(200, newRows[0], {}, corsHeaders);
+        }
+        return jsonResponse(200, rows[0], {}, corsHeaders);
+    }
+    if (method === 'POST' || method === 'PUT') { // Allow both POST and PUT for flexibility
+        const { full_name } = body;
+        if (typeof full_name !== 'string' || full_name.trim().length < 2) {
+            return jsonResponse(400, { error: 'Full name must be a string of at least 2 characters.' }, {}, corsHeaders);
+        }
+        const { rows } = await client.query(
+            `UPDATE public.users SET full_name = $1 WHERE id = $2 RETURNING id, full_name, email, app_role`,
+            [full_name, user.id]
+        );
+        if (rows.length === 0) {
+            return jsonResponse(404, { error: 'User profile not found. Should have been created on GET.' }, {}, corsHeaders);
+        }
+        return jsonResponse(200, rows[0], {}, corsHeaders);
+    }
+    return jsonResponse(405, { error: `Method ${method} Not Allowed on /users/profile` }, {}, corsHeaders);
+};
+
+
 const handleUsers = async (client, method, path, body, user, corsHeaders) => {
     const pathParts = path.split('/').filter(Boolean);
     const userId = pathParts[1];
@@ -208,231 +242,6 @@ const handleTopics = async (client, method, path, body, user, corsHeaders) => {
     return jsonResponse(405, { error: `Method ${method} Not Allowed on /topics` }, {}, corsHeaders);
 };
 
-const handleNotifications = async (client, method, path, body, user, corsHeaders) => {
-    const pathParts = path.split('/').filter(Boolean); // e.g. ["notifications", "abc-123", "comments"]
-    const notificationId = pathParts[1];
-    const isTest = pathParts[1] === 'test';
-    const isComments = pathParts[2] === 'comments';
-
-    // POST /notifications/test
-    if (method === 'POST' && isTest) {
-        // FIXED: Was hard-returning 500 when 'Site Monitoring' topic didn't exist in DB.
-        // Now gracefully falls back to null topicId — insert always succeeds.
-        let topicId = null;
-        try {
-            const topicRes = await client.query(
-                "SELECT id FROM public.topics WHERE name = 'Site Monitoring' LIMIT 1"
-            );
-            if (topicRes.rows.length > 0) {
-                topicId = topicRes.rows[0].id;
-            }
-            // If not found, topicId stays null — notification still created + push broadcast
-        } catch (topicErr) {
-            console.warn('Could not query topics table for test alert:', topicErr.message);
-        }
-        const { rows } = await client.query(
-            `INSERT INTO public.notifications (topic_id, title, message, severity, status, type)
-             VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-            [
-                topicId,
-                'Test Alert: Everything is Awesome!',
-                'This is a test notification to confirm your alert setup is working correctly. No action is required.',
-                'low',
-                'new',
-                'manual'
-            ]
-        );
-        const insertedNotification = rows[0];
-
-        // FIXED: Also send a real OneSignal push so 'Send Test Alert' validates the full pipeline.
-        // Broadcast to ALL active users (last_session within 30 days).
-        const oneSignalAppId = process.env.ONESIGNAL_APP_ID;
-        const oneSignalApiKey = process.env.ONESIGNAL_REST_API_KEY;
-        let pushResult = null;
-        if (oneSignalAppId && oneSignalApiKey) {
-            try {
-                const https = require('https');
-                const pushPayload = JSON.stringify({
-                    app_id: oneSignalAppId,
-                    filters: [{ field: 'last_session', relation: '>', hours_ago: '720' }],
-                    headings: { en: insertedNotification.title },
-                    contents: { en: insertedNotification.message },
-                    data: {
-                        notificationId: insertedNotification.id,
-                        severity: insertedNotification.severity,
-                        type: insertedNotification.type,
-                        site: null,
-                        topic_id: topicId,
-                        status: insertedNotification.status,
-                    },
-                });
-                const pushOptions = {
-                    hostname: 'onesignal.com',
-                    path: '/api/v1/notifications',
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Basic ${oneSignalApiKey}`,
-                        'Content-Length': Buffer.byteLength(pushPayload),
-                    },
-                };
-                pushResult = await new Promise((resolve) => {
-                    const req = https.request(pushOptions, (res) => {
-                        let data = '';
-                        res.on('data', chunk => data += chunk);
-                        res.on('end', () => { try { resolve(JSON.parse(data)); } catch { resolve(data); } });
-                    });
-                    req.on('error', (e) => {
-                        console.error('OneSignal push failed for test alert:', e.message);
-                        resolve(null);
-                    });
-                    req.write(pushPayload);
-                    req.end();
-                });
-                console.log('OneSignal push result for test alert:', JSON.stringify(pushResult));
-            } catch (pushErr) {
-                console.error('Failed to send OneSignal push for test alert:', pushErr.message);
-                // Non-fatal: DB record was already created
-            }
-        } else {
-            console.warn('ONESIGNAL_APP_ID or ONESIGNAL_REST_API_KEY not set — push skipped for test alert.');
-        }
-
-        return jsonResponse(201, { ...insertedNotification, push_notification: pushResult }, {}, corsHeaders);
-    }
-
-    if (notificationId) {
-        // POST /notifications/:id/comments
-        if (isComments && method === 'POST') {
-            const { text } = body;
-            if (!text || typeof text !== 'string' || text.trim().length === 0) {
-                return jsonResponse(400, { error: 'Comment text is required and must be a non-empty string.' }, {}, corsHeaders);
-            }
-            const { rows } = await client.query(
-                "INSERT INTO public.comments (notification_id, user_id, text) VALUES ($1, $2, $3) RETURNING *",
-                [notificationId, user.id, text.trim()]
-            );
-            return jsonResponse(201, rows[0], {}, corsHeaders);
-        }
-
-        // GET /notifications/:id
-        if (method === 'GET') {
-            const notifQuery = client.query("SELECT * FROM public.notifications WHERE id = $1", [notificationId]);
-            const commentsQuery = client.query(
-                "SELECT c.id, c.text, c.created_at, c.user_id FROM public.comments c WHERE c.notification_id = $1 ORDER BY c.created_at ASC",
-                [notificationId]
-            );
-
-            const [notifResult, commentsResult] = await Promise.all([notifQuery, commentsQuery]);
-
-            if (notifResult.rows.length === 0) {
-                return jsonResponse(404, { error: 'Notification not found' }, {}, corsHeaders);
-            }
-
-            const notification = notifResult.rows[0];
-            notification.comments = commentsResult.rows.map(c => ({ ...c, user_full_name: null }));
-
-            return jsonResponse(200, notification, {}, corsHeaders);
-        }
-
-        // PUT /notifications/:id
-        if (method === 'PUT') {
-            const { status } = body;
-            const validStatuses = ['new', 'acknowledged', 'resolved'];
-            if (!status || !validStatuses.includes(status)) {
-                return jsonResponse(400, { error: `Invalid status. Must be one of: ${validStatuses.join(', ')}.` }, {}, corsHeaders);
-            }
-            const { rows } = await client.query(
-                "UPDATE public.notifications SET status = $1 WHERE id = $2 RETURNING *",
-                [status, notificationId]
-            );
-            if (rows.length === 0) {
-                return jsonResponse(404, { error: 'Notification not found' }, {}, corsHeaders);
-            }
-            return jsonResponse(200, rows[0], {}, corsHeaders);
-        }
-    }
-
-    // GET /notifications (list all)
-    if (method === 'GET') {
-        try {
-            // Step 1: Fetch notifications with comments — NO user JOIN to avoid UUID cast issues.
-            // user_full_name is resolved in a separate lightweight query below.
-            const { rows: notifications } = await client.query(`
-                SELECT
-                    n.id,
-                    n.topic_id,
-                    n.title,
-                    n.message,
-                    n.severity,
-                    n.status,
-                    n.type,
-                    n.metadata,
-                    n.created_at,
-                    n.created_at AS timestamp,
-                    n.updated_at,
-                    COALESCE(
-                        JSON_AGG(
-                            JSON_BUILD_OBJECT(
-                                'id',          c.id,
-                                'text',        c.text,
-                                'user_id',     c.user_id,
-                                'created_at',  c.created_at,
-                                'user_full_name', NULL
-                            ) ORDER BY c.created_at ASC
-                        ) FILTER (WHERE c.id IS NOT NULL),
-                        '[]'::json
-                    ) AS comments
-                FROM public.notifications n
-                LEFT JOIN public.comments c ON c.notification_id = n.id
-                GROUP BY n.id
-                ORDER BY n.created_at DESC
-                LIMIT 200
-            `);
-
-            // Step 2: Collect all unique user_ids from comments across all notifications,
-            // but only those that look like valid UUIDs — safe, no casting risk.
-            const uuidPattern = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
-            const uniqueUserIds = [...new Set(
-                notifications.flatMap(n =>
-                    (n.comments || [])
-                        .map(c => c.user_id)
-                        .filter(id => id && uuidPattern.test(id))
-                )
-            )];
-
-            // Step 3: If there are any valid user IDs, fetch their names in one query.
-            let userMap = {};
-            if (uniqueUserIds.length > 0) {
-                const placeholders = uniqueUserIds.map((_, i) => `$${i + 1}`).join(', ');
-                const { rows: users } = await client.query(
-                    `SELECT id::text, full_name FROM public.users WHERE id = ANY(ARRAY[${placeholders}]::uuid[])`,
-                    uniqueUserIds
-                );
-                userMap = Object.fromEntries(users.map(u => [u.id, u.full_name]));
-            }
-
-            // Step 4: Merge user names into the comments.
-            const enriched = notifications.map(n => ({
-                ...n,
-                comments: (n.comments || []).map(c => ({
-                    ...c,
-                    user_full_name: userMap[c.user_id] || null,
-                })),
-            }));
-
-            return jsonResponse(200, enriched, {}, corsHeaders);
-        } catch (notifErr) {
-            // Surface the exact DB error in CloudWatch so you can diagnose it.
-            console.error('NOTIFICATIONS_QUERY_ERROR:', notifErr.message, notifErr.code, notifErr.detail);
-            throw notifErr; // Re-throw so the outer handler returns 500 with details in logs
-        }
-    }
-
-    return jsonResponse(405, { error: `Method ${method} Not Allowed on ${path}` }, {}, corsHeaders);
-};
-
-
 const handleWebhooks = async (client, method, path, body, user, corsHeaders) => {
     const pathParts = path.split('/').filter(Boolean);
     const webhookId = pathParts[1];
@@ -500,10 +309,6 @@ const handleEmails = async (client, method, path, body, corsHeaders) => {
     return jsonResponse(405, { error: `Method ${method} Not Allowed on /emails` }, {}, corsHeaders);
 };
 
-// ADDED: Old deployed client bundles call DELETE /push-subscriptions to unsubscribe.
-// That endpoint didn't exist → CORS preflight got no Access-Control-Allow-Origin header
-// → browser blocked the request → "Failed to fetch" error in console.
-// This stub returns 200 to silence the error. Real unsubscribe is handled client-side by OneSignal SDK.
 const handlePushSubscriptions = async (method, corsHeaders) => {
     if (method === 'DELETE' || method === 'POST') {
         return jsonResponse(200, {
@@ -524,7 +329,6 @@ const handleMonitoring = async (client, method, event, corsHeaders) => {
     if (!siteId) {
         return jsonResponse(400, { error: 'siteId query parameter is required' }, {}, corsHeaders);
     }
-    // Re-use the logic from handleSites by simulating the path
     const simulatedPath = `/sites/${siteId}`;
     return await handleSites(client, 'GET', simulatedPath, {}, corsHeaders);
 };
@@ -540,7 +344,6 @@ exports.handler = async (event) => {
     return { statusCode: 204, headers: corsHeaders, body: '' };
   }
 
-  // Temporary check to allow synthetic monitoring pings
   if (event.path === '/synthetic-ping' && event.httpMethod === 'GET') {
       return jsonResponse(200, { message: 'Ping successful' }, {}, corsHeaders);
   }
@@ -566,16 +369,23 @@ exports.handler = async (event) => {
     client = await pool.connect();
     console.log('[DIAG_POOL_CONNECT] DB connection acquired successfully.');
 
+    // Ensure user exists in our DB
+    await client.query(
+        `INSERT INTO public.users (id, email, app_role) VALUES ($1, $2, $3)
+         ON CONFLICT (id) DO NOTHING`,
+        [user.id, user.email, user.app_role || 'member']
+    );
+
     const method = event.httpMethod;
     const path = event.path;
     const body = event.body ? JSON.parse(event.body) : {};
 
+    if (path.startsWith('/users/profile'))   return await handleProfile(client, method, body, user, corsHeaders);
     if (path.startsWith('/users'))             return await handleUsers(client, method, path, body, user, corsHeaders);
     if (path.startsWith('/teams'))             return await handleTeams(client, method, path, body, user, corsHeaders);
     if (path.startsWith('/sites'))             return await handleSites(client, method, path, body, corsHeaders);
     if (path.startsWith('/monitoring'))        return await handleMonitoring(client, method, event, corsHeaders);
     if (path.startsWith('/topics'))            return await handleTopics(client, method, path, body, user, corsHeaders);
-    if (path.startsWith('/notifications'))     return await handleNotifications(client, method, path, body, user, corsHeaders);
     if (path.startsWith('/webhooks'))          return await handleWebhooks(client, method, path, body, user, corsHeaders);
     if (path.startsWith('/calendar'))          return await handleCalendar(client, method, path, body, corsHeaders);
     if (path.startsWith('/audit-logs'))        return await handleAuditLogs(client, method, path, body, corsHeaders);
@@ -585,19 +395,10 @@ exports.handler = async (event) => {
     return jsonResponse(404, { error: 'Not Found' }, {}, corsHeaders);
 
   } catch (err) {
-    // DIAG_FATAL: Full error breakdown so CloudWatch shows the exact failure point
-    console.error('[DIAG_FATAL] Unhandled error in Lambda handler:');
-    console.error('[DIAG_FATAL] message:', err.message);
-    console.error('[DIAG_FATAL] name:   ', err.name);
-    console.error('[DIAG_FATAL] code:   ', err.code);    // PostgreSQL error code e.g. 42703 = column not found
-    console.error('[DIAG_FATAL] detail: ', err.detail);  // PostgreSQL detail e.g. 'Key (id)=(...) not present'
-    console.error('[DIAG_FATAL] hint:   ', err.hint);    // PostgreSQL hint
-    console.error('[DIAG_FATAL] stack:  ', err.stack);
+    console.error('[DIAG_FATAL] Unhandled error in Lambda handler:', err.message, err.stack);
     return jsonResponse(500, {
       error: 'Internal Server Error',
-      // Return the real error message (remove this line once issue is diagnosed)
       details: err.message,
-      pg_code: err.code || null,
     }, {}, corsHeaders);
   } finally {
     if (client) client.release();

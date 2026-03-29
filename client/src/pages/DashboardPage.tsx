@@ -1,4 +1,3 @@
-
 import React, { useState, useMemo } from 'react';
 import L from 'leaflet';
 import { Header } from '../components/layout/Header';
@@ -9,6 +8,7 @@ import { ActivityFeed } from '../components/dashboard/ActivityFeed';
 import ChartsWidget from '../components/dashboard/ChartsWidget';
 import SiteMap from '../components/monitoring/SiteMap';
 import { Dropdown } from '../components/ui/Dropdown';
+import { EventBanner } from '../components/dashboard/EventBanner'; // Import the EventBanner component
 
 interface DashboardPageProps {
   notifications: Notification[] | Notification;
@@ -129,6 +129,9 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
                         </div>
                     ) : (
                         <>
+                            <div className="mb-6">
+                                <EventBanner />
+                            </div>
                             <div className="mt-6">
                                 <StatCards notifications={safeNotifications} sites={safeSites} />
                             </div>

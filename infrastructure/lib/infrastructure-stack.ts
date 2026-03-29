@@ -17,6 +17,8 @@ import * as fs from 'fs';
 import * as cr from 'aws-cdk-lib/custom-resources';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as crypto from 'crypto';
+import * as events from 'aws-cdk-lib/aws-events';
+import * as targets from 'aws-cdk-lib/aws-events-targets';
 
 export class InfrastructureStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -201,6 +203,37 @@ export class InfrastructureStack extends cdk.Stack {
         subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
       },
     };
+    
+    const notificationLambda = new lambda.Function(this, 'McmNotificationLambda', {
+        ...commonLambdaProps,
+        handler: 'notification-lambda.handler',
+        environment: {
+            ...commonLambdaProps.environment,
+            ONESIGNAL_APP_ID: 'edd7998c-a08b-46ed-bc47-b0ae00dd9050',
+            ONESIGNAL_REST_API_KEY: 'os_v2_app_5xlztdfarndo3pchwcxabxmqkdaukglg7txebo4yfnqlru4ax6rs2twszxicq7d6vxsh3hirtn2p2ncqrhgocqsyf5gbuqpf452m35q',
+        },
+    });
+    dbInstance.connections.allowDefaultPortFrom(notificationLambda);
+
+    const monitoringLambda = new lambda.Function(this, 'McmMonitoringLambda', {
+        ...commonLambdaProps,
+        handler: 'monitoring-lambda.handler',
+        timeout: Duration.minutes(10),
+        environment: {
+            ...commonLambdaProps.environment,
+            NOTIFICATION_LAMBDA_NAME: notificationLambda.functionName,
+        },
+      });
+      dbInstance.connections.allowDefaultPortFrom(monitoringLambda);
+  
+      const rule = new events.Rule(this, 'McmMonitoringRule', {
+        schedule: events.Schedule.expression('cron(0 */2 * * ? *)'),
+      });
+  
+      rule.addTarget(new targets.LambdaFunction(monitoringLambda));
+      
+      notificationLambda.grantInvoke(monitoringLambda);
+
 
     const apiLambda = new lambda.Function(this, 'McmApiLambda', {
       ...commonLambdaProps,
@@ -215,6 +248,7 @@ export class InfrastructureStack extends cdk.Stack {
     dbInstance.connections.allowDefaultPortFrom(topicSubscribersLambda);
 
     const apiLambdaIntegration = new apigateway.LambdaIntegration(apiLambda);
+    const notificationLambdaIntegration = new apigateway.LambdaIntegration(notificationLambda);
     const topicSubscribersLambdaIntegration = new apigateway.LambdaIntegration(topicSubscribersLambda);
 
     const authorizer = new apigateway.CognitoUserPoolsAuthorizer(this, 'McmAlertsCognitoAuthorizer', {
@@ -238,6 +272,24 @@ export class InfrastructureStack extends cdk.Stack {
     
     const monitoring = api.root.addResource('monitoring');
     monitoring.addMethod('GET', apiLambdaIntegration, { authorizer });
+    const monitoringTrigger = monitoring.addResource('trigger');
+    monitoringTrigger.addMethod('POST', new apigateway.LambdaIntegration(monitoringLambda), { authorizer });
+
+    const schedule = monitoring.addResource('schedule');
+    const scheduleLambda = new lambda.Function(this, 'McmScheduleLambda', {
+        ...commonLambdaProps,
+        handler: 'schedule-lambda.handler',
+        environment: {
+            ...commonLambdaProps.environment,
+            RULE_NAME: rule.ruleName,
+        },
+    });
+    schedule.addMethod('PUT', new apigateway.LambdaIntegration(scheduleLambda), { authorizer });
+
+    scheduleLambda.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['events:PutRule'],
+      resources: [rule.ruleArn],
+    }));
     
     const topics = api.root.addResource('topics');
     topics.addMethod('GET', apiLambdaIntegration, { authorizer });
@@ -250,11 +302,25 @@ export class InfrastructureStack extends cdk.Stack {
     subscribersResource.addMethod('GET', topicSubscribersLambdaIntegration, { authorizer });
 
     const notifications = api.root.addResource('notifications');
-    notifications.addMethod('GET', apiLambdaIntegration, { authorizer });
+    notifications.addMethod('GET', notificationLambdaIntegration, { authorizer });
+    notifications.addMethod('POST', notificationLambdaIntegration, { authorizer });
+
+    const testNotification = notifications.addResource('test');
+    testNotification.addMethod('POST', notificationLambdaIntegration, { authorizer });
+
+    const notificationById = notifications.addResource('{notificationId}');
+    notificationById.addMethod('GET', notificationLambdaIntegration, { authorizer });
+    notificationById.addMethod('PUT', notificationLambdaIntegration, { authorizer });
+
+    const comments = notificationById.addResource('comments');
+    comments.addMethod('POST', notificationLambdaIntegration, { authorizer });
 
     const webhooks = api.root.addResource('webhooks');
     webhooks.addMethod('GET', apiLambdaIntegration, { authorizer });
     webhooks.addMethod('POST', apiLambdaIntegration, { authorizer });
+
+    const webhookTrigger = webhooks.addResource('trigger').addResource('{id}');
+    webhookTrigger.addMethod('POST', apiLambdaIntegration);
 
     const calendar = api.root.addResource('calendar');
     calendar.addMethod('GET', apiLambdaIntegration, { authorizer });
@@ -265,6 +331,10 @@ export class InfrastructureStack extends cdk.Stack {
 
     const emails = api.root.addResource('emails');
     emails.addMethod('GET', apiLambdaIntegration, { authorizer });
+
+    const pushSubscriptions = api.root.addResource('push-subscriptions');
+    pushSubscriptions.addMethod('POST', apiLambdaIntegration, { authorizer });
+    pushSubscriptions.addMethod('DELETE', apiLambdaIntegration, { authorizer });
 
     api.latestDeployment?.node.addDependency(dbInitCustomResource);
 

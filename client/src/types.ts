@@ -93,12 +93,14 @@ export interface OneSignalPlayer {
 }
 
 export interface CalendarEvent {
-  id: string;
-  date: string;
+  id?: string;
+  start: string;
   title: string;
-  subtitle?: string;
+  description: string;
   category: string;
-  color: string;
+  allDay: boolean;
+  color?: string;
+  team?: string;
 }
 
 export interface Category {
@@ -142,9 +144,9 @@ export interface MonitoredSite {
 
 export interface WebhookSource {
   id: string;
-  user_id: string;
+  user_id?: string;
   name: string;
-  description: string | null;
+  description?: string | null;
   source_type: string;
   created_at: string;
   topic_id: string | null;

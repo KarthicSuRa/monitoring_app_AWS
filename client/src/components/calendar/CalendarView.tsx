@@ -4,18 +4,21 @@ import { CalendarGrid } from './CalendarGrid';
 import { EventModal } from './EventModal';
 import { CategoryManager } from './CategoryManager';
 import { CalendarEvent, Category } from '../../types';
+import releaseEvents from '../../data/release_events.json';
 
 export interface CalendarViewHandle {
   resetToToday: () => void;
+  filterByTeam: (team: string | null) => void;
 }
 
 export const CalendarView = forwardRef<CalendarViewHandle, {}>((props, ref) => {
-  const [currentDate, setCurrentDate] = useState(new Date(2024, 11, 1)); // December 2024
-  const [events, setEvents] = useState<CalendarEvent[]>([]);
+  const [currentDate, setCurrentDate] = useState(new Date());
+  const [events, setEvents] = useState<CalendarEvent[]>(releaseEvents as CalendarEvent[]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isCategoryManagerOpen, setIsCategoryManagerOpen] = useState(false);
   const [selectedEvent, setSelectedEvent] = useState<Partial<CalendarEvent> | null>(null);
+  const [teamFilter, setTeamFilter] = useState<string | null>(null);
   const [filters, setFilters] = useState<Record<string, any>>({
     teams: [],
     regions: [],
@@ -26,6 +29,9 @@ export const CalendarView = forwardRef<CalendarViewHandle, {}>((props, ref) => {
   useImperativeHandle(ref, () => ({
     resetToToday() {
       setCurrentDate(new Date());
+    },
+    filterByTeam(team: string | null) {
+      setTeamFilter(team);
     }
   }));
 
@@ -34,7 +40,7 @@ export const CalendarView = forwardRef<CalendarViewHandle, {}>((props, ref) => {
   };
 
   const handleDayClick = (date: Date) => {
-    setSelectedEvent({ date: date.toISOString() });
+    setSelectedEvent({ start: date.toISOString() });
     setIsModalOpen(true);
   };
 
@@ -54,7 +60,7 @@ export const CalendarView = forwardRef<CalendarViewHandle, {}>((props, ref) => {
       setEvents(events.map(e => e.id === selectedEvent.id ? { ...e, ...eventData, id: selectedEvent.id } : e));
     } else {
       // Create new event
-      const newEvent = { ...eventData, id: (Math.random() * 1000).toString(), date: selectedEvent?.date || new Date().toISOString() }; // Temporary ID
+      const newEvent = { ...eventData, id: (Math.random() * 1000).toString(), start: selectedEvent?.start || new Date().toISOString() }; // Temporary ID
       setEvents([...events, newEvent]);
     }
     handleCloseModal();
@@ -70,7 +76,9 @@ export const CalendarView = forwardRef<CalendarViewHandle, {}>((props, ref) => {
   };
 
   const filteredEvents = events.filter(event => {
-    // Implement filter logic here based on filters state
+    if (teamFilter && event.team !== teamFilter) {
+      return false;
+    }
     return true;
   });
 

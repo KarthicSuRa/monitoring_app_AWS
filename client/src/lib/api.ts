@@ -8,6 +8,7 @@
       export const getSites = (): Promise<MonitoredSite[]> => apiClient.get('/sites');
       export const addSite = (site: Omit<MonitoredSite, 'id' | 'created_at' | 'updated_at'>): Promise<MonitoredSite> => apiClient.post('/sites', site);
       export const deleteSite = (siteId: string): Promise<void> => apiClient.delete(`/sites/${siteId}`);
+      export const triggerMonitoring = (): Promise<void> => apiClient.post('/monitoring/trigger', {});
 
       // Topics
       export const getTopics = (): Promise<Topic[]> => apiClient.get('/topics');
