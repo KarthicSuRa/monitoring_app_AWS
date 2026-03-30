@@ -1,5 +1,6 @@
 const { Pool } = require("pg");
 const { CognitoJwtVerifier } = require("aws-jwt-verify");
+const https = require('https');
 
 // Centralized CORS configuration
 const getCorsHeaders = (event) => {
@@ -68,6 +69,85 @@ const authenticate = async (event) => {
 };
 
 // =============================================================
+//  OneSignal Push Notification Sender
+// =============================================================
+const sendOneSignalPush = async (client, notification) => {
+    const oneSignalAppId = process.env.ONESIGNAL_APP_ID;
+    const oneSignalApiKey = "os_v2_app_5xlztdfarndo3pchwcxabxmqkddjab4s4dwuuif7xwn5dx5olas26fhhrwajus6x2jugw6jvndoaxbyhvbca73aahy4amrsiqrbbula";
+
+    if (!oneSignalAppId || !oneSignalApiKey) {
+        console.warn('OneSignal environment variables not set. Skipping push notification.');
+        return null;
+    }
+
+    let oneSignalTarget = {
+        included_segments: ["All"] // Default to broad audience
+    };
+
+    // If it's a topic-specific notification, find subscribed users
+    if (notification.topic_id) {
+        try {
+            const { rows: subscribers } = await client.query(
+                'SELECT user_id FROM public.topic_subscribers WHERE topic_id = $1',
+                [notification.topic_id]
+            );
+            const subscriberIds = subscribers.map(s => s.user_id);
+            if (subscriberIds.length > 0) {
+                oneSignalTarget = { include_external_user_ids: subscriberIds };
+            } else {
+                console.log(`Topic ${notification.topic_id} has no subscribers. Skipping push.`);
+                return null; // No one to send it to
+            }
+        } catch (subErr) {
+            console.error(`Failed to get subscribers for topic ${notification.topic_id}:`, subErr.message);
+            return null; // Error, so don't send
+        }
+    }
+
+    const pushPayload = JSON.stringify({
+        app_id: oneSignalAppId,
+        ...oneSignalTarget,
+        headings: { en: notification.title },
+        contents: { en: notification.message },
+        data: {
+            notificationId: notification.id,
+            severity: notification.severity,
+            type: notification.type,
+            topic_id: notification.topic_id,
+            status: notification.status,
+        },
+    });
+
+    const pushOptions = {
+        hostname: 'onesignal.com',
+        path: '/api/v1/notifications',
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Key ${oneSignalApiKey}`,
+            'Content-Length': Buffer.byteLength(pushPayload),
+        },
+    };
+
+    return new Promise((resolve) => {
+        const req = https.request(pushOptions, (res) => {
+            let data = '';
+            res.on('data', chunk => data += chunk);
+            res.on('end', () => {
+                try { resolve(JSON.parse(data)); } catch { resolve(data); }
+            });
+        });
+        req.on('error', (e) => {
+            console.error('OneSignal push request failed:', e.message);
+            resolve({ error: e.message });
+        });
+        req.write(pushPayload);
+        req.end();
+    });
+};
+
+
+// =============================================================
 //  NOTIFICATION HANDLER
 // =============================================================
 
@@ -76,7 +156,45 @@ const handleNotifications = async (client, method, path, body, user, corsHeaders
     const notificationId = pathParts[1];
     const isTest = pathParts[1] === 'test';
     const isComments = pathParts[2] === 'comments';
+    const isGenericPost = method === 'POST' && pathParts.length === 1 && pathParts[0] === 'notifications';
 
+    // POST /notifications (generic, public)
+    if (isGenericPost) {
+        const { topic_id, topic_name, title, message, severity, type, metadata } = body;
+        if (!title || !message || !severity) {
+            return jsonResponse(400, { error: 'Missing required fields: title, message, severity' }, {}, corsHeaders);
+        }
+
+        let finalTopicId = topic_id || null;
+
+        if (topic_name && !finalTopicId) {
+            try {
+                const topicRes = await client.query(
+                    "SELECT id FROM public.topics WHERE name = $1 LIMIT 1",
+                    [topic_name]
+                );
+                if (topicRes.rows.length > 0) {
+                    finalTopicId = topicRes.rows[0].id;
+                } else {
+                    console.warn(`Topic with name '${topic_name}' not found. Creating notification without a topic.`);
+                }
+            } catch (topicErr) {
+                console.error('Error looking up topic by name:', topicErr.message);
+            }
+        }
+
+        const { rows } = await client.query(
+            `INSERT INTO public.notifications (topic_id, title, message, severity, status, type, metadata)
+             VALUES ($1, $2, $3, $4, 'new', $5, $6) RETURNING *`,
+            [finalTopicId, title, message, severity, type || 'webhook', metadata || null]
+        );
+        
+        const insertedNotification = rows[0];
+        const pushResult = await sendOneSignalPush(client, insertedNotification);
+
+        return jsonResponse(201, { ...insertedNotification, push_notification: pushResult }, {}, corsHeaders);
+    }
+    
     // POST /notifications/test
     if (method === 'POST' && isTest) {
         let topicId = null;
@@ -103,56 +221,7 @@ const handleNotifications = async (client, method, path, body, user, corsHeaders
             ]
         );
         const insertedNotification = rows[0];
-
-        const oneSignalAppId = process.env.ONESIGNAL_APP_ID;
-        const oneSignalApiKey = process.env.ONESIGNAL_REST_API_KEY;
-        let pushResult = null;
-        if (oneSignalAppId && oneSignalApiKey) {
-            try {
-                const https = require('https');
-                const pushPayload = JSON.stringify({
-                    app_id: oneSignalAppId,
-                    filters: [{ field: 'last_session', relation: '>', hours_ago: '720' }],
-                    headings: { en: insertedNotification.title },
-                    contents: { en: insertedNotification.message },
-                    data: {
-                        notificationId: insertedNotification.id,
-                        severity: insertedNotification.severity,
-                        type: insertedNotification.type,
-                        site: null,
-                        topic_id: topicId,
-                        status: insertedNotification.status,
-                    },
-                });
-                const pushOptions = {
-                    hostname: 'onesignal.com',
-                    path: '/api/v1/notifications',
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Basic ${oneSignalApiKey}`,
-                        'Content-Length': Buffer.byteLength(pushPayload),
-                    },
-                };
-                pushResult = await new Promise((resolve) => {
-                    const req = https.request(pushOptions, (res) => {
-                        let data = '';
-                        res.on('data', chunk => data += chunk);
-                        res.on('end', () => { try { resolve(JSON.parse(data)); } catch { resolve(data); } });
-                    });
-                    req.on('error', (e) => {
-                        console.error('OneSignal push failed for test alert:', e.message);
-                        resolve(null);
-                    });
-                    req.write(pushPayload);
-                    req.end();
-                });
-            } catch (pushErr) {
-                console.error('Failed to send OneSignal push for test alert:', pushErr.message);
-            }
-        } else {
-            console.warn('ONESIGNAL_APP_ID or ONESIGNAL_REST_API_KEY not set — push skipped for test alert.');
-        }
+        const pushResult = await sendOneSignalPush(client, insertedNotification);
 
         return jsonResponse(201, { ...insertedNotification, push_notification: pushResult }, {}, corsHeaders);
     }
@@ -160,6 +229,9 @@ const handleNotifications = async (client, method, path, body, user, corsHeaders
     if (notificationId && !isTest) {
         // POST /notifications/:id/comments
         if (isComments && method === 'POST') {
+            if (!user || !user.id) {
+              return jsonResponse(401, { error: 'Authentication is required to post a comment.'}, {}, corsHeaders);
+            }
             const { text } = body;
             if (!text || typeof text !== 'string' || text.trim().length === 0) {
                 return jsonResponse(400, { error: 'Comment text is required and must be a non-empty string.' }, {}, corsHeaders);
@@ -280,19 +352,24 @@ exports.handler = async (event) => {
       return jsonResponse(403, { error: 'CORS error: Origin not allowed' }, {}, corsHeaders);
   }
 
-  const authResult = await authenticate(event);
-  if (!authResult.authenticated) {
-    return jsonResponse(401, { error: authResult.error }, {}, corsHeaders);
+  const path = event.path;
+  const method = event.httpMethod;
+  const isPublicPost = method === 'POST' && (path.endsWith('/notifications') || path.endsWith('/notifications/test'));
+
+  let user = null;
+  if (!isPublicPost) {
+    const authResult = await authenticate(event);
+    if (!authResult.authenticated) {
+      return jsonResponse(401, { error: authResult.error }, {}, corsHeaders);
+    }
+    user = authResult.user;
   }
 
-  const { user } = authResult;
   let client;
 
   try {
     initializePool();
     client = await pool.connect();
-    const method = event.httpMethod;
-    const path = event.path;
     const body = event.body ? JSON.parse(event.body) : {};
 
     return await handleNotifications(client, method, path, body, user, corsHeaders);

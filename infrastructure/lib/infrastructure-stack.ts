@@ -303,10 +303,10 @@ export class InfrastructureStack extends cdk.Stack {
 
     const notifications = api.root.addResource('notifications');
     notifications.addMethod('GET', notificationLambdaIntegration, { authorizer });
-    notifications.addMethod('POST', notificationLambdaIntegration, { authorizer });
+    notifications.addMethod('POST', notificationLambdaIntegration);
 
     const testNotification = notifications.addResource('test');
-    testNotification.addMethod('POST', notificationLambdaIntegration, { authorizer });
+    testNotification.addMethod('POST', notificationLambdaIntegration);
 
     const notificationById = notifications.addResource('{notificationId}');
     notificationById.addMethod('GET', notificationLambdaIntegration, { authorizer });
