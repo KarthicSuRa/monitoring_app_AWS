@@ -3,7 +3,7 @@ import React, { useState } from 'react';
 import { Header } from '../components/layout/Header';
 import { Notification, SystemStatusData, User } from '../types';
 import GlobalExecutive from '../components/payments/GlobalExecutive';
-import AlertingPanel from '../components/payments/AlertingPanel';
+import ActionableAlerts from '../components/payments/ActionableAlerts';
 import JapanDeepDive from '../components/payments/JapanDeepDive';
 import USDeepDive from '../components/payments/USDeepDive';
 import UKDeepDive from '../components/payments/UKDeepDive';
@@ -92,7 +92,7 @@ const PaymentsDashboardPage: React.FC<PaymentsDashboardPageProps> = ({
               </CollapsibleCard>
             </div>
             <CollapsibleCard title="Current Active Alerts">
-              <AlertingPanel />
+              <ActionableAlerts />
             </CollapsibleCard>
           </div>
 

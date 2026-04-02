@@ -50,7 +50,7 @@ async function searchOrders(baseUrl, token, clientId, lastSync) {
         filter: { range_filter: { field: "last_modified", from: lastSync } },
       },
     },
-    select: "(order_no,site_id,status,creation_date,last_modified)",
+    select: "(order_no,site_id,status,payment_status,shipping_status,creation_date,last_modified,total_gross_price,currency_code,customer_email,order.has_holds,holds.type,export_status,payment_instruments.payment_method_id)",
     sorts: [{ field: "last_modified", sort_order: "asc" }],
     count: 200, // Max per page
   };

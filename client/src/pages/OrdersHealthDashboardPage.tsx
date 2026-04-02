@@ -11,6 +11,7 @@ import LiveOrdersFirehose from '../components/ordershealth/LiveOrdersFirehose';
 import TimeSinceLastOrder from '../components/ordershealth/TimeSinceLastOrder';
 import StuckOrdersTable from '../components/ordershealth/StuckOrdersTable';
 import OrderComparison from '../components/ordershealth/OrderComparison';
+import StuckOrdersTrend from '../components/ordershealth/StuckOrdersTrend';
 
 interface OrdersHealthDashboardPageProps {
   onNavigate: (page: string) => void;
@@ -75,6 +76,7 @@ const OrdersHealthDashboardPage: React.FC<OrdersHealthDashboardPageProps> = ({
               <div className="bg-white p-4 rounded-lg shadow">
                 <FailedCancelledOrders selectedCountry={selectedCountry} selectedTime={selectedTime} />
               </div>
+              <StuckOrdersTrend />
               <div className="bg-white p-4 rounded-lg shadow">
                 <StuckOrdersTable selectedCountry={selectedCountry} selectedTime={selectedTime} />
               </div>
