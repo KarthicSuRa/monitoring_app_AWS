@@ -1,8 +1,6 @@
 
 import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
-import * as ec2 from 'aws-cdk-lib/aws-ec2';
-import * as rds from 'aws-cdk-lib/aws-rds';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
@@ -20,65 +18,30 @@ import * as crypto from 'crypto';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as sns from 'aws-cdk-lib/aws-sns';
+import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as apigw2 from 'aws-cdk-lib/aws-apigatewayv2';
 import { WebSocketLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import { WebSocketLambdaAuthorizer } from 'aws-cdk-lib/aws-apigatewayv2-authorizers';
+import { createDynamoTables } from './dynamo-tables';
 
 export class InfrastructureStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
+    // ─── FCM Service Account Credentials ─────────────────────────────────
     const serviceAccountCredentialsPath = path.join(__dirname, 'service-account-credentials.json');
     if (!fs.existsSync(serviceAccountCredentialsPath)) {
-      throw new Error(`Service account credentials file not found at ${serviceAccountCredentialsPath}. Please create this file and add your GCP credentials. Make sure to add this file to your .gitignore!`);
+      throw new Error(
+        `Service account credentials file not found at ${serviceAccountCredentialsPath}. ` +
+        `Please create this file and add your GCP credentials. Add it to .gitignore!`
+      );
     }
     const serviceAccountCredentialsRaw = fs.readFileSync(serviceAccountCredentialsPath, 'utf-8');
 
-    const vpc = new ec2.Vpc(this, 'McmAlertsVpc', {
-      maxAzs: 2,
-      natGateways: 0,
-      subnetConfiguration: [
-        {
-          name: 'public',
-          subnetType: ec2.SubnetType.PUBLIC,
-        },
-        {
-          name: 'isolated',
-          subnetType: ec2.SubnetType.PRIVATE_ISOLATED,
-        },
-      ],
-    });
+    // ─── DynamoDB Tables ──────────────────────────────────────────────────
+    const tables = createDynamoTables(this);
 
-    vpc.addGatewayEndpoint('S3GatewayEndpoint', {
-      service: ec2.GatewayVpcEndpointAwsService.S3,
-    });
-    vpc.addInterfaceEndpoint('CloudFormationEndpoint', { service: ec2.InterfaceVpcEndpointAwsService.CLOUDFORMATION });
-    vpc.addInterfaceEndpoint('CognitoIdpEndpoint', {
-      service: new ec2.InterfaceVpcEndpointService(
-        `com.amazonaws.${this.region}.cognito-idp`
-      ),
-    });
-    vpc.addInterfaceEndpoint('StsEndpoint', { service: ec2.InterfaceVpcEndpointAwsService.STS });
-    vpc.addInterfaceEndpoint('Ec2Endpoint', { service: ec2.InterfaceVpcEndpointAwsService.EC2 });
-    vpc.addInterfaceEndpoint('LambdaEndpoint', { service: ec2.InterfaceVpcEndpointAwsService.LAMBDA });
-    vpc.addInterfaceEndpoint('EventsEndpoint', { service: ec2.InterfaceVpcEndpointAwsService.CLOUDWATCH_EVENTS });
-    vpc.addInterfaceEndpoint('SnsEndpoint', { service: ec2.InterfaceVpcEndpointAwsService.SNS });
-    vpc.addInterfaceEndpoint('LogsEndpoint', { service: ec2.InterfaceVpcEndpointAwsService.CLOUDWATCH_LOGS });
-
-    const dbPassword = 'McmAlertsDbPassword123!';
-
-    const dbInstance = new rds.DatabaseInstance(this, 'McmAlertsDB', {
-      engine: rds.DatabaseInstanceEngine.postgres({ version: rds.PostgresEngineVersion.of('16.13', '16') }),
-      instanceType: ec2.InstanceType.of(ec2.InstanceClass.BURSTABLE3, ec2.InstanceSize.MICRO),
-      vpc,
-      vpcSubnets: {
-        subnetType: ec2.SubnetType.PRIVATE_ISOLATED,
-      },
-      credentials: rds.Credentials.fromPassword('postgres', cdk.SecretValue.unsafePlainText(dbPassword)),
-      databaseName: 'mcm_alerts_db',
-      removalPolicy: cdk.RemovalPolicy.DESTROY,
-    });
-
+    // ─── Cognito User Pool ────────────────────────────────────────────────
     const userPool = new cognito.UserPool(this, 'McmAlertsUserPool', {
       userPoolName: 'mcm-alerts-user-pool',
       selfSignUpEnabled: true,
@@ -88,10 +51,7 @@ export class InfrastructureStack extends cdk.Stack {
       },
       autoVerify: { email: true },
       standardAttributes: {
-        email: {
-          required: true,
-          mutable: false,
-        },
+        email: { required: true, mutable: false },
       },
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
@@ -101,56 +61,53 @@ export class InfrastructureStack extends cdk.Stack {
       generateSecret: false,
     });
 
+    // ─── SNS Push Notification Topic ──────────────────────────────────────
     const pushNotificationTopic = new sns.Topic(this, 'McmPushNotificationTopic', {
       displayName: 'MCM Alerts Push Notification Topic',
     });
 
+    // ─── SNS FCM Platform Application ────────────────────────────────────
     const credentialsHash = crypto
       .createHash('sha256')
       .update(serviceAccountCredentialsRaw)
       .digest('hex')
       .slice(0, 12);
 
-      const appName = `McmFcmApp-${credentialsHash}`;
-      const fcmPlatformApplication = new cr.AwsCustomResource(this, 'FcmPlatformApplicationV3', {
-        onCreate: {
-          service: 'SNS',
-          action: 'createPlatformApplication',
-          parameters: {
-            Name: appName,
-            Platform: 'GCM',
-            Attributes: {
-              PlatformCredential: serviceAccountCredentialsRaw,
-            },
-          },
-          physicalResourceId: cr.PhysicalResourceId.of(appName),
+    const appName = `McmFcmApp-${credentialsHash}`;
+    const fcmPlatformApplication = new cr.AwsCustomResource(this, 'FcmPlatformApplicationV3', {
+      onCreate: {
+        service: 'SNS',
+        action: 'createPlatformApplication',
+        parameters: {
+          Name: appName,
+          Platform: 'GCM',
+          Attributes: { PlatformCredential: serviceAccountCredentialsRaw },
         },
-        onUpdate: { // Using onCreate logic for update as it is idempotent
-            service: 'SNS',
-            action: 'createPlatformApplication',
-            parameters: {
-              Name: appName,
-              Platform: 'GCM',
-              Attributes: {
-                PlatformCredential: serviceAccountCredentialsRaw,
-              },
-            },
-            physicalResourceId: cr.PhysicalResourceId.of(appName),
-          },
-        onDelete: {
-          service: 'SNS',
-          action: 'deletePlatformApplication',
-          parameters: {
-            PlatformApplicationArn: new cr.PhysicalResourceIdReference(),
-          },
+        physicalResourceId: cr.PhysicalResourceId.of(appName),
+      },
+      onUpdate: {
+        service: 'SNS',
+        action: 'createPlatformApplication',
+        parameters: {
+          Name: appName,
+          Platform: 'GCM',
+          Attributes: { PlatformCredential: serviceAccountCredentialsRaw },
         },
-        policy: cr.AwsCustomResourcePolicy.fromSdkCalls({
-          resources: cr.AwsCustomResourcePolicy.ANY_RESOURCE,
-        }),
-      });
+        physicalResourceId: cr.PhysicalResourceId.of(appName),
+      },
+      onDelete: {
+        service: 'SNS',
+        action: 'deletePlatformApplication',
+        parameters: { PlatformApplicationArn: new cr.PhysicalResourceIdReference() },
+      },
+      policy: cr.AwsCustomResourcePolicy.fromSdkCalls({
+        resources: cr.AwsCustomResourcePolicy.ANY_RESOURCE,
+      }),
+    });
 
     const fcmPlatformApplicationArn = fcmPlatformApplication.getResponseField('PlatformApplicationArn');
 
+    // ─── S3 + CloudFront ──────────────────────────────────────────────────
     const frontendBucket = new s3.Bucket(this, 'McmAlertsFrontendBucket', {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
       autoDeleteObjects: true,
@@ -167,16 +124,8 @@ export class InfrastructureStack extends cdk.Stack {
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
       },
       errorResponses: [
-        {
-          httpStatus: 404,
-          responseHttpStatus: 200,
-          responsePagePath: '/index.html',
-        },
-        {
-          httpStatus: 403,
-          responseHttpStatus: 200,
-          responsePagePath: '/index.html',
-        },
+        { httpStatus: 404, responseHttpStatus: 200, responsePagePath: '/index.html' },
+        { httpStatus: 403, responseHttpStatus: 200, responsePagePath: '/index.html' },
       ],
     });
 
@@ -187,113 +136,115 @@ export class InfrastructureStack extends cdk.Stack {
       distributionPaths: ['/*'],
     });
 
+    // ─── REST API ─────────────────────────────────────────────────────────
     const restApiAuthorizer = new apigateway.CognitoUserPoolsAuthorizer(this, 'McmAlertsRestApiAuthorizerV2', {
-        cognitoUserPools: [userPool],
-      });
-  
-      const api = new apigateway.RestApi(this, 'McmAlertsApi', {
-        restApiName: 'MCM Alerts Service API',
-        defaultCorsPreflightOptions: {
-          allowOrigins: [
-            'http://localhost:3000',
-            `https://${distribution.distributionDomainName}`],
-          allowMethods: apigateway.Cors.ALL_METHODS,
-          allowHeaders: apigateway.Cors.DEFAULT_HEADERS.concat(['Authorization']),
-          allowCredentials: true,
-        },
-        defaultMethodOptions: {
-          authorizer: restApiAuthorizer,
-          authorizationType: apigateway.AuthorizationType.COGNITO,
-        },
-      });
-
-    const lambdaCode = lambda.Code.fromAsset(path.join(__dirname, '../../lambdas'));
-
-    const checkerLambda = new lambda.Function(this, 'McmCheckerLambda', {
-      runtime: lambda.Runtime.NODEJS_18_X,
-      handler: 'checker-lambda.handler',
-      code: lambdaCode,
-      timeout: Duration.seconds(20),
+      cognitoUserPools: [userPool],
     });
 
-    const vpcLambdaProps = {
-      vpc: vpc,
-      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
-    };
-
-    const authLambda = new lambda.Function(this, 'McmAuthLambda', {
-      runtime: lambda.Runtime.NODEJS_18_X,
-      handler: 'auth-lambda.handler',
-      code: lambdaCode,
-      ...vpcLambdaProps,
-      environment: {
-        COGNITO_USER_POOL_ID: userPool.userPoolId,
-        COGNITO_CLIENT_ID: userPoolClient.userPoolClientId,
-        CLOUDFRONT_URL: `https://${distribution.distributionDomainName}`,
+    const api = new apigateway.RestApi(this, 'McmAlertsApi', {
+      restApiName: 'MCM Alerts Service API',
+      defaultCorsPreflightOptions: {
+        allowOrigins: ['http://localhost:3000', `https://${distribution.distributionDomainName}`],
+        allowMethods: apigateway.Cors.ALL_METHODS,
+        allowHeaders: apigateway.Cors.DEFAULT_HEADERS.concat(['Authorization']),
+        allowCredentials: true,
+      },
+      defaultMethodOptions: {
+        authorizer: restApiAuthorizer,
+        authorizationType: apigateway.AuthorizationType.COGNITO,
       },
     });
 
+    // ─── Lambda Common Props (NO VPC — DynamoDB accessed via internet/gateway endpoint) ─
+    const lambdaCode = lambda.Code.fromAsset(path.join(__dirname, '../../lambdas'));
+
+    // Build table name env vars map
+    const tableEnvVars: Record<string, string> = {
+      TABLE_USERS: tables.users.tableName,
+      TABLE_TEAMS: tables.teams.tableName,
+      TABLE_TEAM_MEMBERS: tables.teamMembers.tableName,
+      TABLE_MONITORED_SITES: tables.monitoredSites.tableName,
+      TABLE_PING_LOGS: tables.pingLogs.tableName,
+      TABLE_SYNTHETIC_TESTS: tables.syntheticTests.tableName,
+      TABLE_SYNTHETIC_STEPS: tables.syntheticSteps.tableName,
+      TABLE_ALERT_RULES: tables.alertRules.tableName,
+      TABLE_MAINTENANCE_WINDOWS: tables.maintenanceWindows.tableName,
+      TABLE_SSL_CERTIFICATES: tables.sslCertificates.tableName,
+      TABLE_HEARTBEAT_CHECKS: tables.heartbeatChecks.tableName,
+      TABLE_NOTIFICATIONS: tables.notifications.tableName,
+      TABLE_COMMENTS: tables.comments.tableName,
+      TABLE_TOPICS: tables.topics.tableName,
+      TABLE_TOPIC_SUBSCRIPTIONS: tables.topicSubscriptions.tableName,
+      TABLE_WEBHOOK_SOURCES: tables.webhookSources.tableName,
+      TABLE_WEBHOOK_EVENTS: tables.webhookEvents.tableName,
+      TABLE_SFCC_ORDERS: tables.sfccOrders.tableName,
+      TABLE_ORDERS: tables.orders.tableName,
+      TABLE_PUSH_SUBSCRIPTIONS: tables.pushSubscriptions.tableName,
+      TABLE_CALENDAR_EVENTS: tables.calendarEvents.tableName,
+      TABLE_AUDIT_LOGS: tables.auditLogs.tableName,
+      TABLE_WEBSOCKET_CONNECTIONS: tables.websocketConnections.tableName,
+      TABLE_USER_PREFS: tables.userPrefs.tableName,
+      TABLE_EMAILS: tables.emails.tableName,
+    };
+
+    const commonLambdaProps = {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      code: lambdaCode,
+      timeout: Duration.seconds(90),
+      environment: {
+        ...tableEnvVars,
+        COGNITO_USER_POOL_ID: userPool.userPoolId,
+        COGNITO_CLIENT_ID: userPoolClient.userPoolClientId,
+        CLOUDFRONT_URL: `https://${distribution.distributionDomainName}`,
+        AWS_NODEJS_CONNECTION_REUSE_ENABLED: '1',
+      },
+    };
+
+    // Helper to grant all DynamoDB table permissions to a Lambda
+    const grantAllTables = (fn: lambda.Function) => {
+      Object.values(tables).forEach((t) => t.grantReadWriteData(fn));
+    };
+
+    // ─── Auth Lambda ──────────────────────────────────────────────────────
+    const authLambda = new lambda.Function(this, 'McmAuthLambda', {
+      ...commonLambdaProps,
+      handler: 'auth-lambda.handler',
+      environment: {
+        ...commonLambdaProps.environment,
+        COGNITO_USER_POOL_ID: userPool.userPoolId,
+        COGNITO_CLIENT_ID: userPoolClient.userPoolClientId,
+      },
+    });
     authLambda.addToRolePolicy(new iam.PolicyStatement({
       actions: ['cognito-idp:SignUp', 'cognito-idp:AdminConfirmSignUp'],
       resources: [userPool.userPoolArn],
     }));
+    grantAllTables(authLambda);
 
-    const signupResource = api.root.addResource('signup');
-    signupResource.addMethod('POST', new apigateway.LambdaIntegration(authLambda), {
-      authorizationType: apigateway.AuthorizationType.NONE,
+    // ─── DB Seed Lambda (replaces DB Init Lambda) ─────────────────────────
+    const dbSeedLambda = new lambda.Function(this, 'DbSeedLambda', {
+      ...commonLambdaProps,
+      handler: 'dynamo-seed.handler',
+      timeout: cdk.Duration.minutes(3),
     });
+    grantAllTables(dbSeedLambda);
 
-    const sqlScript = fs.readFileSync(path.join(__dirname, '../../lambdas/schema.sql'), 'utf8');
-
-    const dbInitLambda = new lambda.Function(this, 'DbInitLambda', {
-      runtime: lambda.Runtime.NODEJS_18_X,
-      handler: 'db-init-lambda.handler',
-      code: lambdaCode,
-      ...vpcLambdaProps,
-      environment: {
-        DB_HOST: dbInstance.dbInstanceEndpointAddress,
-        DB_PORT: dbInstance.dbInstanceEndpointPort,
-        DB_NAME: 'mcm_alerts_db',
-        DB_USER: 'postgres',
-        DB_PASSWORD: dbPassword,
-      },
-      timeout: cdk.Duration.minutes(5),
-    });
-
-    dbInstance.connections.allowDefaultPortFrom(dbInitLambda);
-    dbInstance.grantConnect(dbInitLambda, 'postgres');
-
-    const dbInitProvider = new cr.Provider(this, 'DbInitProvider', {
-      onEventHandler: dbInitLambda,
+    const dbSeedProvider = new cr.Provider(this, 'DbSeedProvider', {
+      onEventHandler: dbSeedLambda,
       logRetention: logs.RetentionDays.ONE_DAY,
     });
 
-    const dbInitCustomResource = new cdk.CustomResource(this, 'DbInitCustomResource', {
-      serviceToken: dbInitProvider.serviceToken,
-      properties: {
-        scriptHash: crypto.createHash('sha256').update(sqlScript).digest('hex'),
-      },
+    // Hash seed data to re-run only when it changes
+    const seedHash = crypto.createHash('sha256')
+      .update(fs.readFileSync(path.join(__dirname, '../../lambdas/dynamo-seed.js'), 'utf8'))
+      .digest('hex');
+
+    new cdk.CustomResource(this, 'DbSeedCustomResource', {
+      serviceToken: dbSeedProvider.serviceToken,
+      properties: { seedHash },
     });
 
-    dbInitCustomResource.node.addDependency(dbInstance);
-
-    const commonLambdaProps = {
-      runtime: lambda.Runtime.NODEJS_18_X,
-      code: lambdaCode,
-      timeout: Duration.seconds(90),
-      environment: {
-        DB_HOST: dbInstance.dbInstanceEndpointAddress,
-        DB_PORT: dbInstance.dbInstanceEndpointPort,
-        DB_NAME: 'mcm_alerts_db',
-        DB_USER: 'postgres',
-        DB_PASSWORD: dbPassword,
-        COGNITO_USER_POOL_ID: userPool.userPoolId,
-        COGNITO_CLIENT_ID: userPoolClient.userPoolClientId,
-        CLOUDFRONT_URL: `https://${distribution.distributionDomainName}`,
-      },
-      ...vpcLambdaProps,
-    };
-
+    // ─── Notification Lambda ──────────────────────────────────────────────
     const notificationLambda = new lambda.Function(this, 'McmNotificationLambda', {
       ...commonLambdaProps,
       handler: 'notification-lambda.handler',
@@ -302,9 +253,18 @@ export class InfrastructureStack extends cdk.Stack {
         SNS_TOPIC_ARN: pushNotificationTopic.topicArn,
       },
     });
-    dbInstance.connections.allowDefaultPortFrom(notificationLambda);
     pushNotificationTopic.grantPublish(notificationLambda);
+    grantAllTables(notificationLambda);
 
+    // ─── Checker Lambda ───────────────────────────────────────────────────
+    const checkerLambda = new lambda.Function(this, 'McmCheckerLambda', {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      handler: 'checker-lambda.handler',
+      code: lambdaCode,
+      timeout: Duration.seconds(20),
+    });
+
+    // ─── Monitoring Lambda ────────────────────────────────────────────────
     const monitoringLambda = new lambda.Function(this, 'McmMonitoringLambda', {
       ...commonLambdaProps,
       handler: 'monitoring-lambda.handler',
@@ -314,16 +274,51 @@ export class InfrastructureStack extends cdk.Stack {
         CHECKER_LAMBDA_NAME: checkerLambda.functionName,
       },
     });
-    dbInstance.connections.allowDefaultPortFrom(monitoringLambda);
+    grantAllTables(monitoringLambda);
     checkerLambda.grantInvoke(monitoringLambda);
-
-    const rule = new events.Rule(this, 'McmMonitoringRule', {
-      schedule: events.Schedule.expression('cron(0 */2 * * ? *)'),
-    });
-
-    rule.addTarget(new targets.LambdaFunction(monitoringLambda));
     notificationLambda.grantInvoke(monitoringLambda);
 
+    const monitoringRule = new events.Rule(this, 'McmMonitoringRule', {
+      schedule: events.Schedule.expression('cron(0 */2 * * ? *)'),
+    });
+    monitoringRule.addTarget(new targets.LambdaFunction(monitoringLambda));
+
+    // ─── SSL Check Lambda (daily) ─────────────────────────────────────────
+    const sslCheckLambda = new lambda.Function(this, 'McmSslCheckLambda', {
+      ...commonLambdaProps,
+      handler: 'ssl-check-lambda.handler',
+      timeout: Duration.minutes(5), // TLS handshakes can be slow for 39 sites
+      environment: {
+        ...commonLambdaProps.environment,
+        NOTIFICATION_LAMBDA_NAME: notificationLambda.functionName,
+      },
+    });
+    grantAllTables(sslCheckLambda);
+    notificationLambda.grantInvoke(sslCheckLambda);
+
+    // Run SSL checks once per day at 06:00 UTC
+    const sslCheckRule = new events.Rule(this, 'McmSslCheckRule', {
+      schedule: events.Schedule.cron({ minute: '0', hour: '6' }),
+      description: 'Daily SSL certificate expiry check for all MCM sites',
+    });
+    sslCheckRule.addTarget(new targets.LambdaFunction(sslCheckLambda));
+
+
+    // ─── Schedule Lambda ──────────────────────────────────────────────────
+    const scheduleLambda = new lambda.Function(this, 'McmScheduleLambda', {
+      ...commonLambdaProps,
+      handler: 'schedule-lambda.handler',
+      environment: {
+        ...commonLambdaProps.environment,
+        RULE_NAME: monitoringRule.ruleName,
+      },
+    });
+    scheduleLambda.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['events:PutRule'],
+      resources: [monitoringRule.ruleArn],
+    }));
+
+    // ─── API Lambda ───────────────────────────────────────────────────────
     const apiLambda = new lambda.Function(this, 'McmApiLambda', {
       ...commonLambdaProps,
       handler: 'api-lambda.handler',
@@ -333,9 +328,8 @@ export class InfrastructureStack extends cdk.Stack {
         SNS_PLATFORM_APPLICATION_ARN: fcmPlatformApplicationArn,
       },
     });
-    dbInstance.connections.allowDefaultPortFrom(apiLambda);
-
-    const apiLambdaSnsPolicy = new iam.PolicyStatement({
+    grantAllTables(apiLambda);
+    apiLambda.addToRolePolicy(new iam.PolicyStatement({
       actions: [
         'sns:CreatePlatformEndpoint',
         'sns:DeletePlatformEndpoint',
@@ -349,112 +343,76 @@ export class InfrastructureStack extends cdk.Stack {
         `${fcmPlatformApplicationArn}/endpoint/*`,
         pushNotificationTopic.topicArn,
       ],
-    });
-    apiLambda.addToRolePolicy(apiLambdaSnsPolicy);
+    }));
 
+    // ─── Orders API Lambda ────────────────────────────────────────────────
+    const ordersApiLambda = new lambda.Function(this, 'McmOrdersApiLambda', {
+      ...commonLambdaProps,
+      handler: 'orders-api-lambda.handler',
+    });
+    grantAllTables(ordersApiLambda);
+
+    // ─── SFCC Order Sync Lambda ───────────────────────────────────────────
+    const sfccOrderSyncLambda = new lambda.Function(this, 'McmSfccOrderSyncLambda', {
+      ...commonLambdaProps,
+      handler: 'sfcc-order-sync.handler',
+      timeout: Duration.minutes(5),
+      environment: {
+        ...commonLambdaProps.environment,
+        REALM_1_BASE_URL: process.env.REALM_1_BASE_URL || '',
+        REALM_1_CLIENT_ID: process.env.REALM_1_CLIENT_ID || '',
+        REALM_1_CLIENT_SECRET: process.env.REALM_1_CLIENT_SECRET || '',
+        REALM_2_BASE_URL: process.env.REALM_2_BASE_URL || '',
+        REALM_2_CLIENT_ID: process.env.REALM_2_CLIENT_ID || '',
+        REALM_2_CLIENT_SECRET: process.env.REALM_2_CLIENT_SECRET || '',
+        REALM_3_BASE_URL: process.env.REALM_3_BASE_URL || '',
+        REALM_3_CLIENT_ID: process.env.REALM_3_CLIENT_ID || '',
+        REALM_3_CLIENT_SECRET: process.env.REALM_3_CLIENT_SECRET || '',
+        SOM_ORDER_LAMBDA_NAME: '', // set below after creation
+      },
+    });
+    grantAllTables(sfccOrderSyncLambda);
+
+    // ─── SOM Order Details Lambda ─────────────────────────────────────────
+    const somOrderDetailsLambda = new lambda.Function(this, 'McmSomOrderDetailsLambda', {
+      ...commonLambdaProps,
+      handler: 'som-order-details-lambda.handler',
+      timeout: Duration.minutes(3),
+      environment: {
+        ...commonLambdaProps.environment,
+        SALESFORCE_HOST: process.env.SALESFORCE_HOST || '',
+        SALESFORCE_CLIENT_ID: process.env.SALESFORCE_CLIENT_ID || '',
+        SALESFORCE_CLIENT_SECRET: process.env.SALESFORCE_CLIENT_SECRET || '',
+      },
+    });
+    grantAllTables(somOrderDetailsLambda);
+    somOrderDetailsLambda.grantInvoke(sfccOrderSyncLambda);
+
+    // Patch env var after both exist
+    sfccOrderSyncLambda.addEnvironment('SOM_ORDER_LAMBDA_NAME', somOrderDetailsLambda.functionName);
+
+    // Schedule SFCC sync every 15 minutes
+    const sfccSyncRule = new events.Rule(this, 'McmSfccSyncRule', {
+      schedule: events.Schedule.rate(Duration.minutes(15)),
+    });
+    sfccSyncRule.addTarget(new targets.LambdaFunction(sfccOrderSyncLambda));
+
+    // ─── Topic Subscribers Lambda ─────────────────────────────────────────
     const topicSubscribersLambda = new lambda.Function(this, 'TopicSubscribersLambda', {
       ...commonLambdaProps,
       handler: 'topic-subscribers-lambda.handler',
     });
-    dbInstance.connections.allowDefaultPortFrom(topicSubscribersLambda);
+    grantAllTables(topicSubscribersLambda);
 
-    const apiLambdaIntegration = new apigateway.LambdaIntegration(apiLambda);
-    const notificationLambdaIntegration = new apigateway.LambdaIntegration(notificationLambda);
-    const topicSubscribersLambdaIntegration = new apigateway.LambdaIntegration(topicSubscribersLambda);
-
-    const users = api.root.addResource('users');
-    users.addMethod('GET', apiLambdaIntegration);
-    const user = users.addResource('{userId}');
-    user.addMethod('GET', apiLambdaIntegration);
-    user.addMethod('PUT', apiLambdaIntegration);
-
-    const teams = api.root.addResource('teams');
-    teams.addMethod('GET', apiLambdaIntegration);
-
-    const sites = api.root.addResource('sites');
-    sites.addMethod('GET', apiLambdaIntegration);
-    sites.addMethod('POST', apiLambdaIntegration);
-    const site = sites.addResource('{siteId}');
-    site.addMethod('DELETE', apiLambdaIntegration);
-
-    const monitoring = api.root.addResource('monitoring');
-    monitoring.addMethod('GET', apiLambdaIntegration);
-    const monitoringTrigger = monitoring.addResource('trigger');
-    monitoringTrigger.addMethod('POST', new apigateway.LambdaIntegration(monitoringLambda));
-
-    const schedule = monitoring.addResource('schedule');
-    const scheduleLambda = new lambda.Function(this, 'McmScheduleLambda', {
-      ...commonLambdaProps,
-      handler: 'schedule-lambda.handler',
-      environment: {
-        ...commonLambdaProps.environment,
-        RULE_NAME: rule.ruleName,
-      },
-    });
-    schedule.addMethod('PUT', new apigateway.LambdaIntegration(scheduleLambda));
-
-    scheduleLambda.addToRolePolicy(new iam.PolicyStatement({
-      actions: ['events:PutRule'],
-      resources: [rule.ruleArn],
-    }));
-
-    const topics = api.root.addResource('topics');
-    topics.addMethod('GET', apiLambdaIntegration);
-    topics.addMethod('POST', apiLambdaIntegration);
-
-    const topicResource = topics.addResource('{topicId}');
-    const subscriptionResource = topicResource.addResource('subscription');
-    subscriptionResource.addMethod('POST', topicSubscribersLambdaIntegration);
-    const subscribersResource = topicResource.addResource('subscribers');
-    subscribersResource.addMethod('GET', topicSubscribersLambdaIntegration);
-
-    const notifications = api.root.addResource('notifications');
-    notifications.addMethod('GET', notificationLambdaIntegration);
-    notifications.addMethod('POST', notificationLambdaIntegration, {
-      authorizationType: apigateway.AuthorizationType.NONE,
+    // ─── WebSocket Auth Lambda ────────────────────────────────────────────
+    const webSocketAuthLambda = new lambda.Function(this, 'McmWebSocketAuthLambda', {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      handler: 'websocket-auth-lambda.handler',
+      code: lambdaCode,
+      environment: { USER_POOL_ID: userPool.userPoolId },
     });
 
-    const testNotification = notifications.addResource('test');
-    testNotification.addMethod('POST', notificationLambdaIntegration, {
-      authorizationType: apigateway.AuthorizationType.NONE,
-    });
-
-    const notificationById = notifications.addResource('{notificationId}');
-    notificationById.addMethod('GET', notificationLambdaIntegration);
-    notificationById.addMethod('PUT', notificationLambdaIntegration);
-
-    const comments = notificationById.addResource('comments');
-    comments.addMethod('POST', notificationLambdaIntegration);
-
-    const webhooks = api.root.addResource('webhooks');
-    webhooks.addMethod('GET', apiLambdaIntegration);
-    webhooks.addMethod('POST', apiLambdaIntegration);
-
-    const webhookTrigger = webhooks.addResource('trigger').addResource('{id}');
-    webhookTrigger.addMethod('POST', apiLambdaIntegration, {
-      authorizationType: apigateway.AuthorizationType.NONE,
-    });
-
-    const calendar = api.root.addResource('calendar');
-    calendar.addMethod('GET', apiLambdaIntegration);
-    calendar.addMethod('POST', apiLambdaIntegration);
-
-    const auditLogs = api.root.addResource('audit-logs');
-    auditLogs.addMethod('GET', apiLambdaIntegration);
-
-    const emails = api.root.addResource('emails');
-    emails.addMethod('GET', apiLambdaIntegration);
-
-    const pushSubscriptions = api.root.addResource('push-subscriptions');
-    pushSubscriptions.addMethod('POST', apiLambdaIntegration);
-    pushSubscriptions.addMethod('DELETE', apiLambdaIntegration);
-
-    const apiDeployment = api.latestDeployment;
-    if (!apiDeployment) {
-      throw new Error('RestApi.latestDeployment is unexpectedly undefined.');
-    }
-    apiDeployment.node.addDependency(dbInitCustomResource);
-
+    // ─── WebSocket Handler Lambda ─────────────────────────────────────────
     const webSocketApi = new apigw2.WebSocketApi(this, 'McmAlertsWebSocketApi');
     const webSocketStage = new apigw2.WebSocketStage(this, 'McmAlertsWebSocketStage', {
       webSocketApi,
@@ -470,21 +428,17 @@ export class InfrastructureStack extends cdk.Stack {
         WEBSOCKET_API_ENDPOINT: webSocketStage.url,
       },
     });
+    grantAllTables(webSocketHandler);
+    webSocketHandler.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['execute-api:ManageConnections'],
+      resources: [`arn:aws:execute-api:${this.region}:${this.account}:${webSocketApi.apiId}/*`],
+    }));
 
-    dbInstance.connections.allowDefaultPortFrom(webSocketHandler);
-
-    const webSocketAuthLambda = new lambda.Function(this, 'McmWebSocketAuthLambda', {
-      runtime: lambda.Runtime.NODEJS_18_X,
-      handler: 'websocket-auth-lambda.handler',
-      code: lambdaCode,
-      environment: {
-        USER_POOL_ID: userPool.userPoolId,
-      },
-    });
-
-    const webSocketAuthorizer = new WebSocketLambdaAuthorizer('McmWebSocketAuthorizerV2', webSocketAuthLambda, {
-      identitySource: ['route.request.querystring.token'],
-    });
+    const webSocketAuthorizer = new WebSocketLambdaAuthorizer(
+      'McmWebSocketAuthorizerV2',
+      webSocketAuthLambda,
+      { identitySource: ['route.request.querystring.token'] }
+    );
 
     webSocketApi.addRoute('$connect', {
       integration: new WebSocketLambdaIntegration('ConnectIntegration', webSocketHandler),
@@ -497,38 +451,129 @@ export class InfrastructureStack extends cdk.Stack {
       integration: new WebSocketLambdaIntegration('DefaultIntegration', webSocketHandler),
     });
     webSocketApi.addRoute('ping', {
-        integration: new WebSocketLambdaIntegration('PingIntegration', webSocketHandler),
-      });
+      integration: new WebSocketLambdaIntegration('PingIntegration', webSocketHandler),
+    });
 
+    // ─── API Routes ───────────────────────────────────────────────────────
+    const apiLambdaInt = new apigateway.LambdaIntegration(apiLambda);
+    const notifLambdaInt = new apigateway.LambdaIntegration(notificationLambda);
+    const ordersLambdaInt = new apigateway.LambdaIntegration(ordersApiLambda);
+    const topicsSubLambdaInt = new apigateway.LambdaIntegration(topicSubscribersLambda);
+
+    // /signup
+    const signupResource = api.root.addResource('signup');
+    signupResource.addMethod('POST', new apigateway.LambdaIntegration(authLambda), {
+      authorizationType: apigateway.AuthorizationType.NONE,
+    });
+
+    // /users
+    const users = api.root.addResource('users');
+    users.addMethod('GET', apiLambdaInt);
+    const userById = users.addResource('{userId}');
+    userById.addMethod('GET', apiLambdaInt);
+    userById.addMethod('PUT', apiLambdaInt);
+
+    // /users/profile
+    const userProfile = users.addResource('profile');
+    userProfile.addMethod('GET', apiLambdaInt);
+    userProfile.addMethod('PUT', apiLambdaInt);
+
+    // /teams
+    const teams = api.root.addResource('teams');
+    teams.addMethod('GET', apiLambdaInt);
+
+    // /sites
+    const sites = api.root.addResource('sites');
+    sites.addMethod('GET', apiLambdaInt);
+    sites.addMethod('POST', apiLambdaInt);
+    const siteById = sites.addResource('{siteId}');
+    siteById.addMethod('GET', apiLambdaInt);
+    siteById.addMethod('DELETE', apiLambdaInt);
+
+    // /monitoring
+    const monitoring = api.root.addResource('monitoring');
+    monitoring.addMethod('GET', apiLambdaInt);
+    monitoring.addResource('trigger').addMethod('POST', new apigateway.LambdaIntegration(monitoringLambda));
+    monitoring.addResource('schedule').addMethod('PUT', new apigateway.LambdaIntegration(scheduleLambda));
+
+    // /topics
+    const topicsResource = api.root.addResource('topics');
+    topicsResource.addMethod('GET', apiLambdaInt);
+    topicsResource.addMethod('POST', apiLambdaInt);
+    const topicById = topicsResource.addResource('{topicId}');
+    topicById.addResource('subscription').addMethod('POST', topicsSubLambdaInt);
+    topicById.addResource('subscribers').addMethod('GET', topicsSubLambdaInt);
+
+    // /notifications
+    const notificationsResource = api.root.addResource('notifications');
+    notificationsResource.addMethod('GET', notifLambdaInt);
+    notificationsResource.addMethod('POST', notifLambdaInt, {
+      authorizationType: apigateway.AuthorizationType.NONE,
+    });
+    notificationsResource.addResource('test').addMethod('POST', notifLambdaInt, {
+      authorizationType: apigateway.AuthorizationType.NONE,
+    });
+    const notifById = notificationsResource.addResource('{notificationId}');
+    notifById.addMethod('GET', notifLambdaInt);
+    notifById.addMethod('PUT', notifLambdaInt);
+    notifById.addResource('comments').addMethod('POST', notifLambdaInt);
+
+    // /orders
+    const ordersResource = api.root.addResource('orders');
+    ordersResource.addMethod('GET', ordersLambdaInt);
+    const orderById = ordersResource.addResource('{orderNo}');
+    orderById.addMethod('GET', ordersLambdaInt);
+    orderById.addMethod('PUT', ordersLambdaInt); // manual fulfillment update
+
+    // /webhooks
+    const webhooks = api.root.addResource('webhooks');
+    webhooks.addMethod('GET', apiLambdaInt);
+    webhooks.addMethod('POST', apiLambdaInt);
+    webhooks.addResource('trigger').addResource('{id}').addMethod('POST', apiLambdaInt, {
+      authorizationType: apigateway.AuthorizationType.NONE,
+    });
+
+    // /calendar
+    const calendar = api.root.addResource('calendar');
+    calendar.addMethod('GET', apiLambdaInt);
+    calendar.addMethod('POST', apiLambdaInt);
+
+    // /audit-logs
+    api.root.addResource('audit-logs').addMethod('GET', apiLambdaInt);
+
+    // /emails
+    api.root.addResource('emails').addMethod('GET', apiLambdaInt);
+
+    // /push-subscriptions
+    const pushSubs = api.root.addResource('push-subscriptions');
+    pushSubs.addMethod('POST', apiLambdaInt);
+    pushSubs.addMethod('DELETE', apiLambdaInt);
+
+    // ─── Outputs ──────────────────────────────────────────────────────────
     new cdk.CfnOutput(this, 'McmAlertsCloudFrontURL', {
       value: `https://${distribution.distributionDomainName}`,
-      description: 'The URL for the CloudFront distribution.',
+      description: 'CloudFront URL',
     });
     new cdk.CfnOutput(this, 'McmAlertsApiGatewayUrl', {
       value: api.url,
-      description: 'The URL for the API Gateway.',
+      description: 'REST API Gateway URL',
     });
     new cdk.CfnOutput(this, 'McmAlertsWebSocketApiUrl', {
       value: webSocketStage.url,
-      description: 'The URL for the WebSocket API.',
+      description: 'WebSocket API URL',
     });
-    new cdk.CfnOutput(this, 'CognitoUserPoolId', {
-      value: userPool.userPoolId,
-    });
-    new cdk.CfnOutput(this, 'CognitoUserPoolClientId', {
-      value: userPoolClient.userPoolClientId,
-    });
+    new cdk.CfnOutput(this, 'CognitoUserPoolId', { value: userPool.userPoolId });
+    new cdk.CfnOutput(this, 'CognitoUserPoolClientId', { value: userPoolClient.userPoolClientId });
     new cdk.CfnOutput(this, 'SnsTopicArn', {
       value: pushNotificationTopic.topicArn,
-      description: 'ARN of the SNS topic for push notifications.',
+      description: 'SNS Push Notification Topic ARN',
     });
     new cdk.CfnOutput(this, 'SnsPlatformApplicationArn', {
       value: fcmPlatformApplicationArn,
-      description: 'ARN of the SNS Platform Application for FCM.',
+      description: 'SNS FCM Platform Application ARN',
     });
     new cdk.CfnOutput(this, 'McmAlertsCloudFrontDistributionId', {
       value: distribution.distributionId,
-      description: 'The ID of the CloudFront distribution.',
     });
   }
 }

@@ -17,7 +17,9 @@ interface IntegrationPageProps {
     onNavigate: (path: string) => void;
 }
 
-const webhookBaseUrl = `https://${import.meta.env.VITE_API_URL}/webhook`;
+// Public endpoint: external systems POST alerts to /notifications (no auth required)
+const webhookBaseUrl = `${import.meta.env.VITE_API_URL?.replace(/\/$/, '')}/notifications`;
+
 
 const sourceTypes = [
     { key: 'generic', name: 'Generic Webhook', icon: 'webhook', color: 'text-slate-400' },

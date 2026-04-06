@@ -1,77 +1,69 @@
-const { Pool } = require('pg');
-const AWS = require('aws-sdk');
+/**
+ * websocket-lambda.js  (DynamoDB rewrite)
+ */
+const { ApiGatewayManagementApiClient, PostToConnectionCommand } = require('@aws-sdk/client-apigatewaymanagementapi');
+const { TABLES, now, ttlDays, putItem, deleteItem } = require('./dynamo-client');
 
-const apiGatewayManagementApi = new AWS.ApiGatewayManagementApi({
-  apiVersion: '2018-11-29',
-  endpoint: process.env.WEBSOCKET_API_ENDPOINT,
-});
-
-const dbPool = new Pool({
-  host: process.env.DB_HOST,
-  port: process.env.DB_PORT,
-  database: process.env.DB_NAME,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-});
+let apiGw;
+function getApiGw() {
+  if (!apiGw) {
+    apiGw = new ApiGatewayManagementApiClient({
+      endpoint: process.env.WEBSOCKET_API_ENDPOINT,
+    });
+  }
+  return apiGw;
+}
 
 exports.handler = async (event) => {
-  const { body, requestContext: { connectionId, routeKey, authorizer } } = event;
-  const userId = authorizer ? authorizer.principalId : null;
+  const { requestContext: { connectionId, routeKey, authorizer } } = event;
+  const userId = authorizer?.principalId || null;
+  const body = event.body;
 
-  let dbClient;
   try {
-    dbClient = await dbPool.connect();
-
     switch (routeKey) {
       case '$connect':
-        console.log(`WebSocket Connect: ${connectionId}, User: ${userId}`);
         if (!userId) {
-          console.log('Unauthorized connection, rejecting.');
+          console.warn('Rejected unauthenticated WebSocket connection');
           return { statusCode: 401, body: 'Unauthorized' };
         }
-        await dbClient.query(
-          'INSERT INTO public.websocket_connections (connection_id, user_id) VALUES ($1, $2)',
-          [connectionId, userId]
-        );
+        await putItem(TABLES.WEBSOCKET_CONNECTIONS, {
+          connection_id: connectionId,
+          user_id: userId,
+          created_at: now(),
+          ttl: ttlDays(1), // auto-expire stale connections after 24h
+        });
+        console.log(`WS Connect: ${connectionId}, user: ${userId}`);
         break;
 
       case '$disconnect':
-        console.log(`WebSocket Disconnect: ${connectionId}`);
-        await dbClient.query(
-          'DELETE FROM public.websocket_connections WHERE connection_id = $1',
-          [connectionId]
-        );
-        break;
-
-      case '$default':
-        console.log(`WebSocket Default Route: ${connectionId}, Body: ${body}`);
-        try {
-          await apiGatewayManagementApi.postToConnection({
-            ConnectionId: connectionId,
-            Data: `You sent: ${body}`,
-          }).promise();
-        } catch (e) {
-          console.error('Error posting to connection:', e);
-        }
+        await deleteItem(TABLES.WEBSOCKET_CONNECTIONS, { connection_id: connectionId });
+        console.log(`WS Disconnect: ${connectionId}`);
         break;
 
       case 'ping':
-        await apiGatewayManagementApi.postToConnection({
+        await getApiGw().send(new PostToConnectionCommand({
           ConnectionId: connectionId,
-          Data: 'pong',
-        }).promise();
+          Data: Buffer.from(JSON.stringify({ type: 'pong', timestamp: now() })),
+        }));
+        break;
+
+      case '$default':
+        try {
+          await getApiGw().send(new PostToConnectionCommand({
+            ConnectionId: connectionId,
+            Data: Buffer.from(JSON.stringify({ type: 'echo', data: body })),
+          }));
+        } catch (e) {
+          console.error('Error posting to WS connection:', e.message);
+        }
         break;
 
       default:
-        console.log(`Unknown WebSocket Route: ${routeKey}`);
+        console.log(`Unknown WS route: ${routeKey}`);
     }
-  } catch (error) {
-    console.error('Database or WebSocket error:', error);
+  } catch (err) {
+    console.error('WebSocket Lambda error:', err.message, err.stack);
     return { statusCode: 500, body: 'Internal Server Error' };
-  } finally {
-    if (dbClient) {
-      dbClient.release();
-    }
   }
 
   return { statusCode: 200, body: 'Ok' };

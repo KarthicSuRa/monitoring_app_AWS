@@ -142,12 +142,19 @@ export interface MonitoredSite {
   updated_at: string;
   latitude: number | null;
   longitude: number | null;
+  is_paused?: boolean;
+  // Written by monitoring-lambda after each check run:
   status?: 'online' | 'offline' | 'unknown';
-  ping_logs?: PingLog[];
+  last_checked_at?: string;       // clean ISO timestamp
+  last_response_time_ms?: number | null;
+  last_status_code?: number | null;
+  // Aggregated by GET /sites:
   latest_ping?: PingLog;
-  last_checked?: string;
+  ping_logs?: PingLog[];
+  last_checked?: string;          // legacy alias
   incidents?: Incident[];
 }
+
 
 export interface WebhookSource {
   id: string;
@@ -205,4 +212,93 @@ export interface Email {
   sender: string;
   message: string;
   received_at: string;
+}
+
+// ─── Order Fulfillment Tracking Types ────────────────────────────────────
+
+export type PaymentStatus = 'PAID' | 'PENDING' | 'FAILED' | 'REFUNDED';
+export type ExportStatus = 'EXPORTED' | 'NOT_EXPORTED' | 'FAILED';
+export type FulfillmentStatus = 'PENDING' | 'PROCESSING' | 'PICKING' | 'PACKING' | 'FULFILLED' | 'SHIPPED' | 'CANCELLED';
+export type PickingStatus = 'PENDING' | 'IN_PICKING' | 'PICKED' | 'FAILED';
+export type PackingStatus = 'PENDING' | 'PACKED';
+export type ShipmentStatus = 'PENDING' | 'SHIPPED' | 'IN_TRANSIT' | 'DELIVERED' | 'RETURNED';
+export type ReturnStatus = 'NONE' | 'REQUESTED' | 'IN_TRANSIT' | 'RECEIVED';
+
+export type TimelineEventStatus = 'done' | 'in_progress' | 'pending' | 'upcoming' | 'failed';
+
+export interface OrderTimelineEvent {
+  label: string;
+  timestamp: string | null;
+  status: TimelineEventStatus;
+  detail?: string | null;
+}
+
+export interface Order {
+  order_no: string;
+  source_system: string;
+  site_id: string;
+
+  // Order basics
+  order_status: string;
+  order_total: number;
+  currency: string;
+  creation_date: string;
+  last_modified: string;
+  customer_email: string | null;
+
+  // Payment
+  payment_status: PaymentStatus;
+  payment_method: string | null;
+
+  // Export
+  export_status: ExportStatus;
+
+  // Fulfillment
+  fulfillment_status: FulfillmentStatus;
+  fulfillment_order_id: string | null;
+  fulfillment_location: string | null;
+  fulfillment_created_at: string | null;
+
+  // Picking
+  picking_status: PickingStatus;
+  picking_started_at: string | null;
+  picking_completed_at: string | null;
+
+  // Packing
+  packing_status: PackingStatus;
+  packing_completed_at: string | null;
+
+  // Shipping
+  shipment_status: ShipmentStatus;
+  shipment_id: string | null;
+  carrier: string | null;
+  tracking_number: string | null;
+  ship_date: string | null;
+  delivery_date: string | null;
+
+  // Returns
+  return_status: ReturnStatus;
+  return_tracking_number: string | null;
+
+  // Exceptions
+  exception_flags: string[];
+  last_event: string | null;
+  last_event_at: string | null;
+
+  created_at: string;
+  updated_at: string;
+  last_updated_at: string;
+
+  // Enriched on frontend
+  timeline?: OrderTimelineEvent[];
+}
+
+export interface OrderListResponse {
+  orders: Order[];
+  stats: {
+    total: number;
+    byFulfillmentStatus: Record<string, number>;
+    byShipmentStatus: Record<string, number>;
+    exceptions: number;
+  };
 }

@@ -1,474 +1,404 @@
-const { Pool } = require("pg");
+/**
+ * api-lambda.js  (DynamoDB rewrite)
+ * Handles: /users, /teams, /sites, /topics, /webhooks,
+ *          /calendar, /audit-logs, /emails, /push-subscriptions, /monitoring
+ */
 const {
-    SNSClient,
-    CreatePlatformEndpointCommand,
-    DeleteEndpointCommand,
-    SubscribeCommand,
-    UnsubscribeCommand,
-    GetEndpointAttributesCommand,
-    SetEndpointAttributesCommand,
-} = require("@aws-sdk/client-sns");
+  SNSClient,
+  CreatePlatformEndpointCommand,
+  DeleteEndpointCommand,
+  SubscribeCommand,
+  GetEndpointAttributesCommand,
+  SetEndpointAttributesCommand,
+} = require('@aws-sdk/client-sns');
+
+const {
+  TABLES, now, newId,
+  getItem, putItem, updateItem, deleteItem,
+  queryItems, scanItems,
+  ttlDays,
+} = require('./dynamo-client');
 
 const snsClient = new SNSClient({});
 
-// Centralized CORS configuration
-const getCorsHeaders = (event) => {
-    const origin = (event.headers || {}).origin || (event.headers || {}).Origin || '';
-    const cloudfrontUrl = process.env.CLOUDFRONT_URL ? process.env.CLOUDFRONT_URL.replace(/\/$/, '') : '';
-    const normalizedOrigin = origin.replace(/\/$/, '');
-    const allowedOrigins = [cloudfrontUrl, 'http://localhost:3000'].filter(Boolean);
+// ─── CORS ─────────────────────────────────────────────────────────────────
 
-    if (origin && (allowedOrigins.includes(normalizedOrigin) || allowedOrigins.includes(origin))) {
-        return {
-            'Access-Control-Allow-Origin': origin,
-            'Access-Control-Allow-Credentials': 'true',
-            'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Amz-User-Agent',
-            'Access-Control-Allow-Methods': 'OPTIONS,POST,GET,PUT,DELETE',
-        };
-    }
-    return {};
+const getCorsHeaders = (event) => {
+  const origin = (event.headers || {}).origin || (event.headers || {}).Origin || '';
+  const cloudfrontUrl = (process.env.CLOUDFRONT_URL || '').replace(/\/$/, '');
+  const allowed = [cloudfrontUrl, 'http://localhost:3000'].filter(Boolean);
+  if (origin && allowed.includes(origin.replace(/\/$/, ''))) {
+    return {
+      'Access-Control-Allow-Origin': origin,
+      'Access-Control-Allow-Credentials': 'true',
+      'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token',
+      'Access-Control-Allow-Methods': 'OPTIONS,POST,GET,PUT,DELETE',
+    };
+  }
+  return {};
 };
 
-const jsonResponse = (statusCode, body, headers = {}, corsHeaders = {}) => ({
-    statusCode,
-    headers: { ...corsHeaders, ...headers, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body || {}),
+const json = (status, body, cors = {}) => ({
+  statusCode: status,
+  headers: { ...cors, 'Content-Type': 'application/json' },
+  body: JSON.stringify(body || {}),
 });
 
+// ─── USERS ────────────────────────────────────────────────────────────────
 
-// =============================================================
-//  DATABASE
-// =============================================================
-
-let pool;
-const initializePool = () => {
-  if (!pool) {
-    const { DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD } = process.env;
-    if (!DB_HOST || !DB_PORT || !DB_NAME || !DB_USER || !DB_PASSWORD) {
-        throw new Error('Database connection environment variables are not fully set.');
+async function handleProfile(method, body, user, cors) {
+  if (method === 'GET') {
+    let item = await getItem(TABLES.USERS, { id: user.id });
+    if (!item) {
+      item = { id: user.id, email: user.email, app_role: user.app_role || 'member', created_at: now(), updated_at: now() };
+      await putItem(TABLES.USERS, item);
     }
-    pool = new Pool({
-        connectionString: `postgres://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}`,
-        ssl: { rejectUnauthorized: false },
-        connectionTimeoutMillis: 10000,
-    });
+    return json(200, item, cors);
   }
-};
+  if (method === 'POST' || method === 'PUT') {
+    const { full_name } = body;
+    if (!full_name || full_name.trim().length < 2)
+      return json(400, { error: 'full_name must be at least 2 characters.' }, cors);
+    const updated = await updateItem(TABLES.USERS, { id: user.id }, { full_name: full_name.trim(), updated_at: now() });
+    return json(200, updated, cors);
+  }
+  return json(405, { error: 'Method not allowed' }, cors);
+}
 
-initializePool();
+async function handleUsers(method, pathParts, body, user, cors) {
+  const userId = pathParts[1];
 
-// =============================================================
-//  API HANDLERS
-// =============================================================
+  if (method === 'GET' && !userId) {
+    if (user.app_role !== 'admin') return json(403, { error: 'Forbidden' }, cors);
+    const items = await scanItems(TABLES.USERS);
+    return json(200, items, cors);
+  }
+  if (method === 'GET' && userId) {
+    const item = await getItem(TABLES.USERS, { id: userId });
+    return item ? json(200, item, cors) : json(404, { error: 'User not found' }, cors);
+  }
+  if (method === 'PUT' && userId) {
+    if (user.app_role !== 'admin') return json(403, { error: 'Forbidden' }, cors);
+    const { full_name, app_role } = body;
+    const updated = await updateItem(TABLES.USERS, { id: userId }, { full_name, app_role, updated_at: now() });
+    return json(200, updated, cors);
+  }
+  return json(405, { error: 'Method not allowed' }, cors);
+}
 
-const handleProfile = async (client, method, body, user, corsHeaders) => {
-    if (method === 'GET') {
-        const { rows } = await client.query(
-            "SELECT id, full_name, email, app_role FROM public.users WHERE id = $1",
-            [user.id]
-        );
-        if (rows.length === 0) {
-            // Optionally create a profile if it doesn't exist
-            const { rows: newRows } = await client.query(
-                "INSERT INTO public.users (id, email, app_role) VALUES ($1, $2, $3) RETURNING id, full_name, email, app_role",
-                [user.id, user.email, user.app_role || 'member']
-            );
-            return jsonResponse(200, newRows[0], {}, corsHeaders);
-        }
-        return jsonResponse(200, rows[0], {}, corsHeaders);
-    }
-    if (method === 'POST' || method === 'PUT') { // Allow both POST and PUT for flexibility
-        const { full_name } = body;
-        if (typeof full_name !== 'string' || full_name.trim().length < 2) {
-            return jsonResponse(400, { error: 'Full name must be a string of at least 2 characters.' }, {}, corsHeaders);
-        }
-        const { rows } = await client.query(
-            `UPDATE public.users SET full_name = $1 WHERE id = $2 RETURNING id, full_name, email, app_role`,
-            [full_name, user.id]
-        );
-        if (rows.length === 0) {
-            return jsonResponse(404, { error: 'User profile not found. Should have been created on GET.' }, {}, corsHeaders);
-        }
-        return jsonResponse(200, rows[0], {}, corsHeaders);
-    }
-    return jsonResponse(405, { error: `Method ${method} Not Allowed on /users/profile` }, {}, corsHeaders);
-};
+// ─── TEAMS ────────────────────────────────────────────────────────────────
 
+async function handleTeams(method, body, user, cors) {
+  if (method === 'GET') {
+    const items = await scanItems(TABLES.TEAMS);
+    return json(200, items, cors);
+  }
+  return json(405, { error: 'Method not allowed' }, cors);
+}
 
-const handleUsers = async (client, method, path, body, user, corsHeaders) => {
-    const pathParts = path.split('/').filter(Boolean);
-    const userId = pathParts[1];
+// ─── SITES ────────────────────────────────────────────────────────────────
 
-    if (method === 'GET' && !userId) {
-        if (user.app_role !== 'admin') return jsonResponse(403, { error: 'Forbidden: Admin access required.' }, {}, corsHeaders);
-        const { rows } = await client.query("SELECT id, full_name, email, app_role, created_at FROM public.users ORDER BY full_name");
-        return jsonResponse(200, rows, {}, corsHeaders);
-    }
-    
-    if (method === 'GET' && userId) {
-         const { rows } = await client.query("SELECT id, full_name, email, app_role, created_at FROM public.users WHERE id = $1", [userId]);
-         return rows.length === 1 ? jsonResponse(200, rows[0], {}, corsHeaders) : jsonResponse(404, { error: 'User not found' }, {}, corsHeaders);
-    }
-    
-    if (method === 'PUT' && userId) {
-        if (user.app_role !== 'admin') return jsonResponse(403, { error: 'Forbidden: Admin access required.' }, {}, corsHeaders);
-        const { full_name, app_role } = body;
-        const { rows } = await client.query(
-            "UPDATE public.users SET full_name = $1, app_role = $2 WHERE id = $3 RETURNING id, full_name, email, app_role",
-            [full_name, app_role, userId]
-        );
-        return rows.length === 1 ? jsonResponse(200, rows[0], {}, corsHeaders) : jsonResponse(404, { error: 'User not found' }, {}, corsHeaders);
-    }
+async function handleSites(method, pathParts, body, cors) {
+  const siteId = pathParts[1];
 
-    return jsonResponse(405, { error: `Method ${method} Not Allowed on /users` }, {}, corsHeaders);
-};
+  if (method === 'GET' && siteId) {
+    const site = await getItem(TABLES.MONITORED_SITES, { id: siteId });
+    if (!site) return json(404, { error: 'Site not found' }, cors);
 
-const handleTeams = async (client, method, path, body, user, corsHeaders) => {
-    if (method === 'GET') {
-        const { rows } = await client.query("SELECT id, name, created_by, created_at FROM public.teams");
-        return jsonResponse(200, rows, {}, corsHeaders);
-    }
-    return jsonResponse(405, { error: `Method ${method} Not Allowed on /teams` }, {}, corsHeaders);
-};
+    // Fetch latest 100 ping logs (SK sorted: most recent last, so we reverse)
+    const pings = await queryItems(TABLES.PING_LOGS, {
+      KeyConditionExpression: 'site_id = :sid',
+      ExpressionAttributeValues: { ':sid': siteId },
+      ScanIndexForward: false,
+      Limit: 100,
+    });
+    site.ping_logs = pings;
+    return json(200, site, cors);
+  }
 
-const handleSites = async (client, method, path, body, corsHeaders) => {
-    const pathParts = path.split('/').filter(Boolean);
-    const siteId = pathParts[1];
+  if (method === 'GET') {
+    const sites = await scanItems(TABLES.MONITORED_SITES);
+    // status, last_checked_at, last_response_time_ms are written by monitoring-lambda
+    // after each check run — no need to query ping logs on every list request.
+    const enriched = sites.map(s => ({
+      ...s,
+      // normalise status to 3 possible values
+      status: s.status === 'online' ? 'online' : s.status === 'offline' ? 'offline' : 'unknown',
+      latest_ping: s.last_checked_at ? {
+        is_up: s.status === 'online',
+        response_time_ms: s.last_response_time_ms ?? null,
+        checked_at: s.last_checked_at,          // clean ISO string
+        checked_at_iso: s.last_checked_at,
+        status_code: s.last_status_code ?? null,
+      } : null,
+    }));
+    enriched.sort((a, b) => a.name.localeCompare(b.name));
+    return json(200, enriched, cors);
+  }
 
-    if (method === 'GET' && siteId) {
-        // Fetch a single site with its ping logs
-        const siteQuery = "SELECT * FROM public.monitored_sites WHERE id = $1";
-        const pingsQuery = "SELECT * FROM public.ping_logs WHERE site_id = $1 ORDER BY checked_at DESC LIMIT 100";
+  if (method === 'POST') {
+    const { name, url, country, latitude, longitude } = body;
+    if (!name || !url) return json(400, { error: 'name and url are required' }, cors);
+    const ts = now();
+    const item = { id: newId(), name, url, country, latitude, longitude, is_paused: false, status: 'active', created_at: ts, updated_at: ts };
+    await putItem(TABLES.MONITORED_SITES, item);
+    return json(201, item, cors);
+  }
 
-        const siteResult = await client.query(siteQuery, [siteId]);
-        if (siteResult.rows.length === 0) {
-            return jsonResponse(404, { error: 'Site not found' }, {}, corsHeaders);
-        }
+  if (method === 'DELETE' && siteId) {
+    await deleteItem(TABLES.MONITORED_SITES, { id: siteId });
+    return json(204, {}, cors);
+  }
+  return json(405, { error: 'Method not allowed' }, cors);
+}
 
-        const pingsResult = await client.query(pingsQuery, [siteId]);
-        const site = siteResult.rows[0];
-        site.ping_logs = pingsResult.rows;
+// ─── TOPICS ───────────────────────────────────────────────────────────────
 
-        return jsonResponse(200, site, {}, corsHeaders);
-    }
-    
-    if (method === 'GET') {
-        // Fetch all sites with their latest ping status
-        const query = `
-            SELECT
-                s.id, s.name, s.url, s.country, s.latitude, s.longitude, s.is_paused, s.created_at, s.updated_at,
-                lp.is_up,
-                lp.response_time_ms,
-                lp.checked_at as latest_ping_at
-            FROM
-                public.monitored_sites s
-            LEFT JOIN LATERAL (
-                SELECT is_up, response_time_ms, checked_at
-                FROM public.ping_logs
-                WHERE site_id = s.id
-                ORDER BY checked_at DESC
-                LIMIT 1
-            ) lp ON true
-            ORDER BY s.name;
-        `;
-        const { rows } = await client.query(query);
-        const sites = rows.map(site => ({
-            ...site,
-            status: site.is_up === null ? 'unknown' : (site.is_up ? 'online' : 'offline'),
-            latest_ping: site.latest_ping_at ? {
-                is_up: site.is_up,
-                response_time_ms: site.response_time_ms,
-                checked_at: site.latest_ping_at
-            } : null
+async function handleTopics(method, body, user, cors) {
+  if (method === 'GET') {
+    const allTopics = await scanItems(TABLES.TOPICS);
+    // Check subscription status for this user
+    const subs = await queryItems(TABLES.TOPIC_SUBSCRIPTIONS, {
+      KeyConditionExpression: 'user_id = :uid',
+      ExpressionAttributeValues: { ':uid': user.id },
+    });
+    const subscribedIds = new Set(subs.map(s => s.topic_id));
+    const enriched = allTopics.map(t => ({ ...t, is_subscribed: subscribedIds.has(t.id) }));
+    enriched.sort((a, b) => a.name.localeCompare(b.name));
+    return json(200, enriched, cors);
+  }
+  if (method === 'POST') {
+    const { name, description } = body;
+    if (!name) return json(400, { error: 'Topic name is required' }, cors);
+    const ts = now();
+    const item = { id: newId(), name, description: description || null, created_at: ts, updated_at: ts };
+    await putItem(TABLES.TOPICS, item);
+    return json(201, item, cors);
+  }
+  return json(405, { error: 'Method not allowed' }, cors);
+}
+
+// ─── WEBHOOKS ─────────────────────────────────────────────────────────────
+
+async function handleWebhooks(method, pathParts, body, user, cors) {
+  const webhookId = pathParts[1];
+  if (method === 'GET') {
+    const items = await scanItems(TABLES.WEBHOOK_SOURCES);
+    items.sort((a, b) => b.created_at.localeCompare(a.created_at));
+    return json(200, items, cors);
+  }
+  if (method === 'POST') {
+    const { name, source_type, topic_id } = body;
+    if (!name || !source_type) return json(400, { error: 'name and source_type are required' }, cors);
+    const ts = now();
+    const item = { id: newId(), name, source_type, topic_id: topic_id || null, created_at: ts, updated_at: ts };
+    await putItem(TABLES.WEBHOOK_SOURCES, item);
+    return json(201, item, cors);
+  }
+  if (method === 'DELETE' && webhookId) {
+    await deleteItem(TABLES.WEBHOOK_SOURCES, { id: webhookId });
+    return json(200, { success: true }, cors);
+  }
+  return json(405, { error: 'Method not allowed' }, cors);
+}
+
+// ─── CALENDAR ─────────────────────────────────────────────────────────────
+
+async function handleCalendar(method, body, cors) {
+  if (method === 'GET') {
+    const items = await scanItems(TABLES.CALENDAR_EVENTS);
+    items.sort((a, b) => a.start_time.localeCompare(b.start_time));
+    return json(200, items, cors);
+  }
+  if (method === 'POST') {
+    const { title, start_time, end_time, description, category } = body;
+    if (!title || !start_time) return json(400, { error: 'title and start_time are required' }, cors);
+    const ts = now();
+    const yearMonth = start_time.slice(0, 7); // "2026-04"
+    const item = { id: newId(), title, start_time, end_time, description, category, year_month: yearMonth, created_at: ts, updated_at: ts };
+    await putItem(TABLES.CALENDAR_EVENTS, item);
+    return json(201, item, cors);
+  }
+  return json(405, { error: 'Method not allowed' }, cors);
+}
+
+// ─── AUDIT LOGS ───────────────────────────────────────────────────────────
+
+async function handleAuditLogs(method, cors) {
+  if (method === 'GET') {
+    const items = await queryItems(TABLES.AUDIT_LOGS, {
+      IndexName: 'all-created-index',
+      KeyConditionExpression: 'log_type = :lt',
+      ExpressionAttributeValues: { ':lt': 'AUDIT' },
+      ScanIndexForward: false,
+      Limit: 200,
+    });
+    return json(200, items, cors);
+  }
+  return json(405, { error: 'Method not allowed' }, cors);
+}
+
+// ─── EMAILS ───────────────────────────────────────────────────────────────
+
+async function handleEmails(method, cors) {
+  if (method === 'GET') {
+    const items = await scanItems(TABLES.EMAILS);
+    items.sort((a, b) => b.created_at.localeCompare(a.created_at));
+    return json(200, items.slice(0, 100), cors);
+  }
+  return json(405, { error: 'Method not allowed' }, cors);
+}
+
+// ─── PUSH SUBSCRIPTIONS ───────────────────────────────────────────────────
+
+async function handlePushSubscriptions(method, body, user, event, cors) {
+  const { SNS_PLATFORM_APPLICATION_ARN, SNS_TOPIC_ARN } = process.env;
+  if (!SNS_PLATFORM_APPLICATION_ARN || !SNS_TOPIC_ARN)
+    return json(500, { error: 'Push notifications not configured.' }, cors);
+
+  if (method === 'POST') {
+    const { token } = body;
+    if (!token) return json(400, { error: 'Device token is required.' }, cors);
+
+    try {
+      const endpointRes = await snsClient.send(new CreatePlatformEndpointCommand({
+        PlatformApplicationArn: SNS_PLATFORM_APPLICATION_ARN,
+        Token: token,
+        CustomUserData: `User-ID:${user.id}`,
+      }));
+      const endpointArn = endpointRes.EndpointArn;
+
+      // Ensure endpoint is enabled
+      const attrRes = await snsClient.send(new GetEndpointAttributesCommand({ EndpointArn: endpointArn }));
+      if (attrRes.Attributes.Enabled !== 'true') {
+        await snsClient.send(new SetEndpointAttributesCommand({
+          EndpointArn: endpointArn,
+          Attributes: { Enabled: 'true' },
         }));
-        return jsonResponse(200, sites, {}, corsHeaders);
+      }
+
+      const subRes = await snsClient.send(new SubscribeCommand({
+        TopicArn: SNS_TOPIC_ARN,
+        Protocol: 'application',
+        Endpoint: endpointArn,
+      }));
+      const subscriptionArn = subRes.SubscriptionArn;
+
+      const ts = now();
+      await putItem(TABLES.PUSH_SUBSCRIPTIONS, {
+        user_id: user.id,
+        token,
+        endpoint_arn: endpointArn,
+        subscription_arn: subscriptionArn,
+        created_at: ts,
+      });
+
+      return json(201, { success: true, endpointArn, subscriptionArn }, cors);
+    } catch (err) {
+      console.error('Push subscribe error:', err.message);
+      return json(500, { error: 'Failed to create push subscription.', details: err.message }, cors);
     }
+  }
 
-    if (method === 'POST') {
-        const { name, url, country, latitude, longitude } = body;
-        if (!name || !url) return jsonResponse(400, {error: 'Name and URL are required'}, {}, corsHeaders);
-        const { rows } = await client.query(
-            "INSERT INTO public.monitored_sites (name, url, country, latitude, longitude) VALUES ($1, $2, $3, $4, $5) RETURNING *",
-            [name, url, country, latitude, longitude]
-        );
-        return jsonResponse(201, rows[0], {}, corsHeaders);
+  if (method === 'DELETE') {
+    const token = event.queryStringParameters?.token;
+    if (!token) return json(400, { error: 'token query param required.' }, cors);
+    try {
+      const subs = await queryItems(TABLES.PUSH_SUBSCRIPTIONS, {
+        IndexName: 'token-index',
+        KeyConditionExpression: '#t = :tok',
+        ExpressionAttributeNames: { '#t': 'token' },
+        ExpressionAttributeValues: { ':tok': token },
+        Limit: 1,
+      });
+      if (subs.length === 0) return json(404, { error: 'Subscription not found.' }, cors);
+      const sub = subs[0];
+      if (sub.user_id !== user.id) return json(403, { error: 'Forbidden' }, cors);
+
+      try {
+        await snsClient.send(new DeleteEndpointCommand({ EndpointArn: sub.endpoint_arn }));
+      } catch (snsErr) {
+        if (!['InvalidParameterException', 'NotFoundException'].includes(snsErr.name)) throw snsErr;
+      }
+      await deleteItem(TABLES.PUSH_SUBSCRIPTIONS, { user_id: user.id, token });
+      return json(200, { success: true }, cors);
+    } catch (err) {
+      console.error('Push delete error:', err.message);
+      return json(500, { error: 'Failed to delete subscription.', details: err.message }, cors);
     }
-    if (method === 'DELETE') {
-        if(!siteId) return jsonResponse(400, {error: 'Site ID is required'}, {}, corsHeaders);
-        await client.query("DELETE FROM public.monitored_sites WHERE id = $1", [siteId]);
-        return jsonResponse(204, {}, {}, corsHeaders);
-    }
-    return jsonResponse(405, { error: `Method ${method} Not Allowed on /sites` }, {}, corsHeaders);
-};
+  }
 
+  return json(405, { error: 'Method not allowed' }, cors);
+}
 
-const handleTopics = async (client, method, path, body, user, corsHeaders) => {
-    if (method === 'GET') {
-        const { rows } = await client.query("SELECT t.id, t.name, t.description, CASE WHEN ts.id IS NOT NULL THEN true ELSE false END as is_subscribed FROM public.topics t LEFT JOIN public.topic_subscriptions ts ON t.id = ts.topic_id AND ts.user_id = $1 ORDER BY name", [user.id]);
-        return jsonResponse(200, rows, {}, corsHeaders);
-    }
-    if (method === 'POST') {
-        const { name, description } = body;
-        if (!name) return jsonResponse(400, { error: 'Topic name is required' }, {}, corsHeaders);
-        const { rows } = await client.query(
-            "INSERT INTO public.topics (name, description) VALUES ($1, $2) RETURNING *",
-            [name, description || null]
-        );
-        return jsonResponse(201, rows[0], {}, corsHeaders);
-    }
-    return jsonResponse(405, { error: `Method ${method} Not Allowed on /topics` }, {}, corsHeaders);
-};
+// ─── MONITORING (proxy to sites with ping logs) ───────────────────────────
 
-const handleWebhooks = async (client, method, path, body, user, corsHeaders) => {
-    const pathParts = path.split('/').filter(Boolean);
-    const webhookId = pathParts[1];
+async function handleMonitoring(method, event, cors) {
+  if (method !== 'GET') return json(405, { error: 'Method not allowed' }, cors);
+  const siteId = event.queryStringParameters?.siteId;
+  if (!siteId) return json(400, { error: 'siteId query param required' }, cors);
+  return handleSites('GET', ['sites', siteId], {}, cors);
+}
 
-    if (method === 'GET') {
-        const { rows } = await client.query(
-            'SELECT id, name, source_type, topic_id, description, created_at FROM public.webhook_sources ORDER BY created_at DESC'
-        );
-        return jsonResponse(200, rows, {}, corsHeaders);
-    }
-
-    if (method === 'POST') {
-        const { name, source_type, topic_id, description } = body;
-        if (!name || !source_type) return jsonResponse(400, { error: 'name and source_type are required' }, {}, corsHeaders);
-        const { rows } = await client.query(
-            `INSERT INTO public.webhook_sources (name, source_type, topic_id, description, user_id)
-             VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-            [name, source_type, topic_id || null, description || null, user.id]
-        );
-        return jsonResponse(201, rows[0], {}, corsHeaders);
-    }
-
-    if (method === 'DELETE' && webhookId) {
-        const { rowCount } = await client.query(
-            'DELETE FROM public.webhook_sources WHERE id = $1 RETURNING id',
-            [webhookId]
-        );
-        if (rowCount === 0) return jsonResponse(404, { error: 'Webhook source not found' }, {}, corsHeaders);
-        return jsonResponse(200, { success: true }, {}, corsHeaders);
-    }
-
-    return jsonResponse(405, { error: `Method ${method} Not Allowed on /webhooks` }, {}, corsHeaders);
-};
-
-const handleCalendar = async (client, method, path, body, corsHeaders) => {
-    if (method === 'GET') {
-        const { rows } = await client.query("SELECT id, title, start_time, end_time, description, category FROM public.calendar_events ORDER BY start_time");
-        return jsonResponse(200, rows, {}, corsHeaders);
-    }
-    if (method === 'POST') {
-        const { title, start_time, end_time, description, category } = body;
-        if (!title || !start_time) return jsonResponse(400, { error: 'Title and start_time are required' }, {}, corsHeaders);
-        const { rows } = await client.query(
-            "INSERT INTO public.calendar_events (title, start_time, end_time, description, category) VALUES ($1, $2, $3, $4, $5) RETURNING *",
-            [title, start_time, end_time, description, category]
-        );
-        return jsonResponse(201, rows[0], {}, corsHeaders);
-    }
-    return jsonResponse(405, { error: `Method ${method} Not Allowed on /calendar` }, {}, corsHeaders);
-};
-
-const handleAuditLogs = async (client, method, path, body, corsHeaders) => {
-    if (method === 'GET') {
-        const { rows } = await client.query("SELECT a.id, a.action, a.target_resource, a.details, a.created_at, u.email FROM public.audit_logs a LEFT JOIN public.users u ON a.user_id = u.id ORDER BY a.created_at DESC LIMIT 200");
-        return jsonResponse(200, rows, {}, corsHeaders);
-    }
-    return jsonResponse(405, { error: `Method ${method} Not Allowed on /audit-logs` }, {}, corsHeaders);
-};
-
-const handleEmails = async (client, method, path, body, corsHeaders) => {
-    if (method === 'GET') {
-        const { rows } = await client.query("SELECT id, recipient, subject, status, source, created_at FROM public.emails ORDER BY created_at DESC LIMIT 100");
-        return jsonResponse(200, rows, {}, corsHeaders);
-    }
-    return jsonResponse(405, { error: `Method ${method} Not Allowed on /emails` }, {}, corsHeaders);
-};
-
-const handlePushSubscriptions = async (client, method, body, user, corsHeaders, event) => {
-    const { SNS_PLATFORM_APPLICATION_ARN, SNS_TOPIC_ARN } = process.env;
-
-    if (!SNS_PLATFORM_APPLICATION_ARN || !SNS_TOPIC_ARN) {
-        console.error('SNS environment variables are not set.');
-        return jsonResponse(500, { error: 'Push notifications are not configured on the server.' }, {}, corsHeaders);
-    }
-
-    if (method === 'POST') {
-        const { token } = body;
-        if (!token) {
-            return jsonResponse(400, { error: 'Device token is required.' }, {}, corsHeaders);
-        }
-        try {
-            // 1. Create Platform Endpoint in SNS
-            const createEndpointCmd = new CreatePlatformEndpointCommand({
-                PlatformApplicationArn: SNS_PLATFORM_APPLICATION_ARN,
-                Token: token,
-                CustomUserData: `User-ID:${user.id}`,
-            });
-            const endpointRes = await snsClient.send(createEndpointCmd);
-            const endpointArn = endpointRes.EndpointArn;
-
-            if (!endpointArn) {
-                throw new Error("Failed to create SNS platform endpoint.");
-            }
-            
-            // 2. Ensure the endpoint is enabled
-            const getAttrCmd = new GetEndpointAttributesCommand({ EndpointArn: endpointArn });
-            const attrRes = await snsClient.send(getAttrCmd);
-            if (attrRes.Attributes.Enabled !== 'true') {
-                const setAttrCmd = new SetEndpointAttributesCommand({ EndpointArn: endpointArn, Attributes: { Enabled: 'true' } });
-                await snsClient.send(setAttrCmd);
-            }
-
-            // 3. Create a subscription to the topic
-            const subscribeCmd = new SubscribeCommand({
-                TopicArn: SNS_TOPIC_ARN,
-                Protocol: 'application',
-                Endpoint: endpointArn,
-            });
-            const subscriptionRes = await snsClient.send(subscribeCmd);
-            const subscriptionArn = subscriptionRes.SubscriptionArn;
-            
-            if (!subscriptionArn) {
-                throw new Error("Failed to create SNS topic subscription.");
-            }
-
-            // 4. Store the subscription info in the database
-            await client.query(
-                `INSERT INTO public.push_subscriptions (user_id, token, endpoint_arn, subscription_arn) 
-                 VALUES ($1, $2, $3, $4)
-                 ON CONFLICT (token) DO UPDATE SET user_id = $1, endpoint_arn = $3, subscription_arn = $4`,
-                [user.id, token, endpointArn, subscriptionArn]
-            );
-
-            return jsonResponse(201, { success: true, endpointArn, subscriptionArn }, {}, corsHeaders);
-
-        } catch (error) {
-            console.error("Error creating push subscription:", error.message, error.stack);
-            return jsonResponse(500, { error: 'Failed to create push subscription.', details: error.message }, {}, corsHeaders);
-        }
-    }
-
-    if (method === 'DELETE') {
-        const token = event.queryStringParameters?.token;
-        if (!token) {
-            return jsonResponse(400, { error: 'Device token is required in query string.' }, {}, corsHeaders);
-        }
-        try {
-            // 1. Find the subscription in the database
-            const { rows } = await client.query("SELECT endpoint_arn FROM public.push_subscriptions WHERE token = $1 AND user_id = $2", [token, user.id]);
-            if (rows.length === 0) {
-                return jsonResponse(404, { error: 'Subscription not found.' }, {}, corsHeaders);
-            }
-            const endpointArn = rows[0].endpoint_arn;
-
-            // 2. Delete the Platform Endpoint from SNS (this also deletes associated subscriptions)
-            const deleteEndpointCmd = new DeleteEndpointCommand({ EndpointArn: endpointArn });
-            await snsClient.send(deleteEndpointCmd);
-
-            // 3. Delete the record from our database
-            await client.query("DELETE FROM public.push_subscriptions WHERE token = $1 AND user_id = $2", [token, user.id]);
-
-            return jsonResponse(200, { success: true }, {}, corsHeaders);
-
-        } catch (error) {
-            console.error("Error deleting push subscription:", error.message, error.stack);
-            // If the endpoint doesn't exist in SNS, it might have been deleted already. Still remove from our DB.
-            if (error.name === 'InvalidParameterException' || error.name === 'NotFoundException') {
-                 await client.query("DELETE FROM public.push_subscriptions WHERE token = $1 AND user_id = $2", [token, user.id]);
-                 return jsonResponse(200, { success: true, message: 'Cleaned up stale subscription.' }, {}, corsHeaders);
-            }
-            return jsonResponse(500, { error: 'Failed to delete push subscription.', details: error.message }, {}, corsHeaders);
-        }
-    }
-
-    return jsonResponse(405, { error: `Method ${method} Not Allowed on /push-subscriptions` }, {}, corsHeaders);
-};
-
-
-const handleMonitoring = async (client, method, event, corsHeaders) => {
-    if (method !== 'GET') {
-        return jsonResponse(405, { error: `Method ${method} Not Allowed on /monitoring` }, {}, corsHeaders);
-    }
-    const siteId = event.queryStringParameters?.siteId;
-    if (!siteId) {
-        return jsonResponse(400, { error: 'siteId query parameter is required' }, {}, corsHeaders);
-    }
-    const simulatedPath = `/sites/${siteId}`;
-    return await handleSites(client, 'GET', simulatedPath, {}, corsHeaders);
-};
-
-// =============================================================
-//  MAIN LAMBDA HANDLER
-// =============================================================
+// ─── MAIN HANDLER ─────────────────────────────────────────────────────────
 
 exports.handler = async (event) => {
-  const corsHeaders = getCorsHeaders(event);
+  const cors = getCorsHeaders(event);
 
-  if (event.httpMethod === 'OPTIONS') {
-    return { statusCode: 204, headers: corsHeaders, body: '' };
-  }
-  
-  // A check to prevent API access if the origin is not allowed.
-  const requestOrigin = (event.headers || {}).origin || '';
-  if (requestOrigin && !corsHeaders['Access-Control-Allow-Origin']) {
-      return jsonResponse(403, { error: 'CORS error: Origin not allowed' }, {});
-  }
-  
-  // For public endpoints that don't require auth, handle them here.
-  if (event.path === '/synthetic-ping' && event.httpMethod === 'GET') {
-      return jsonResponse(200, { message: 'Ping successful' }, {}, corsHeaders);
-  }
+  if (event.httpMethod === 'OPTIONS')
+    return { statusCode: 204, headers: cors, body: '' };
 
-  // All subsequent endpoints require authentication.
-  const claims = event.requestContext.authorizer?.claims;
-  if (!claims) {
-      return jsonResponse(401, { error: 'Unauthorized: No claims found in request. This is an authorizer configuration issue.' }, {}, corsHeaders);
-  }
+  const reqOrigin = (event.headers || {}).origin || '';
+  if (reqOrigin && !cors['Access-Control-Allow-Origin'])
+    return json(403, { error: 'CORS: Origin not allowed' });
+
+  if (event.path === '/synthetic-ping' && event.httpMethod === 'GET')
+    return json(200, { message: 'Ping successful' }, cors);
+
+  const claims = event.requestContext?.authorizer?.claims;
+  if (!claims) return json(401, { error: 'Unauthorized' }, cors);
 
   const user = {
-      id: claims.sub,
-      email: claims.email,
-      app_role: claims['custom:app_role'] || 'member' // Default role if not present
+    id: claims.sub,
+    email: claims.email,
+    app_role: claims['custom:app_role'] || 'member',
   };
 
-  let client;
+  // Upsert user on every authenticated request
+  const existing = await getItem(TABLES.USERS, { id: user.id });
+  if (!existing) {
+    await putItem(TABLES.USERS, {
+      id: user.id,
+      email: user.email,
+      app_role: user.app_role,
+      created_at: now(),
+      updated_at: now(),
+    });
+  }
+
+  const method = event.httpMethod;
+  const path = event.path.replace(/^\/prod/, '');
+  const pathParts = path.split('/').filter(Boolean);
+  const body = event.body ? JSON.parse(event.body) : {};
+
   try {
-    client = await pool.connect();
+    const base = pathParts[0];
 
-    // Ensure user exists in our DB upon first authenticated request
-    await client.query(
-        `INSERT INTO public.users (id, email, app_role) VALUES ($1, $2, $3)
-         ON CONFLICT (id) DO NOTHING`,
-        [user.id, user.email, user.app_role]
-    );
+    if (base === 'users' && pathParts[1] === 'profile') return await handleProfile(method, body, user, cors);
+    if (base === 'users')             return await handleUsers(method, pathParts, body, user, cors);
+    if (base === 'teams')             return await handleTeams(method, body, user, cors);
+    if (base === 'sites')             return await handleSites(method, pathParts, body, cors);
+    if (base === 'monitoring')        return await handleMonitoring(method, event, cors);
+    if (base === 'topics')            return await handleTopics(method, body, user, cors);
+    if (base === 'webhooks')          return await handleWebhooks(method, pathParts, body, user, cors);
+    if (base === 'calendar')          return await handleCalendar(method, body, cors);
+    if (base === 'audit-logs')        return await handleAuditLogs(method, cors);
+    if (base === 'emails')            return await handleEmails(method, cors);
+    if (base === 'push-subscriptions') return await handlePushSubscriptions(method, body, user, event, cors);
 
-    const method = event.httpMethod;
-    const path = event.path;
-    const body = event.body ? JSON.parse(event.body) : {};
-
-    if (path.startsWith('/users/profile'))   return await handleProfile(client, method, body, user, corsHeaders);
-    if (path.startsWith('/users'))             return await handleUsers(client, method, path, body, user, corsHeaders);
-    if (path.startsWith('/teams'))             return await handleTeams(client, method, path, body, user, corsHeaders);
-    if (path.startsWith('/sites'))             return await handleSites(client, method, path, body, corsHeaders);
-    if (path.startsWith('/monitoring'))        return await handleMonitoring(client, method, event, corsHeaders);
-    if (path.startsWith('/topics'))            return await handleTopics(client, method, path, body, user, corsHeaders);
-    if (path.startsWith('/webhooks'))          return await handleWebhooks(client, method, path, body, user, corsHeaders);
-    if (path.startsWith('/calendar'))          return await handleCalendar(client, method, path, body, corsHeaders);
-    if (path.startsWith('/audit-logs'))        return await handleAuditLogs(client, method, path, body, corsHeaders);
-    if (path.startsWith('/emails'))            return await handleEmails(client, method, path, body, corsHeaders);
-    if (path.startsWith('/push-subscriptions')) return await handlePushSubscriptions(client, method, body, user, corsHeaders, event);
-
-    return jsonResponse(404, { error: 'Not Found' }, {}, corsHeaders);
-
+    return json(404, { error: 'Not Found' }, cors);
   } catch (err) {
-    console.error('FATAL: Unhandled error in Lambda handler:', err.message, err.stack);
-    return jsonResponse(500, {
-      error: 'Internal Server Error',
-      details: err.message,
-    }, {}, corsHeaders);
-  } finally {
-    if (client) client.release();
+    console.error('FATAL api-lambda:', err.message, err.stack);
+    return json(500, { error: 'Internal Server Error', details: err.message }, cors);
   }
 };

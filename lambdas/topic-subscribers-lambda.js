@@ -1,118 +1,87 @@
-const { Pool } = require('pg');
+/**
+ * topic-subscribers-lambda.js  (DynamoDB rewrite)
+ * Handles topic subscription toggle and subscriber listing.
+ */
+const {
+  TABLES, now, newId,
+  getItem, putItem, deleteItem,
+  queryItems, scanItems,
+} = require('./dynamo-client');
 
-// --- Database Configuration ---
-const pool = new Pool({
-  host: process.env.DB_HOST,
-  port: process.env.DB_PORT || 5432,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-  database: process.env.DB_NAME,
-  ssl: { rejectUnauthorized: false },
-});
-
-// --- CORS Configuration ---
 const getCorsHeaders = (event) => {
-  const cloudfrontUrl = process.env.CLOUDFRONT_URL; // This is set in the CDK
-  const allowedOrigins = [
-    'http://localhost:3000', // For local development
-    cloudfrontUrl,
-  ];
-  const origin = event.headers?.origin;
-
-  if (allowedOrigins.includes(origin)) {
+  const origin = event.headers?.origin || event.headers?.Origin || '';
+  const cf = (process.env.CLOUDFRONT_URL || '').replace(/\/$/, '');
+  const allowed = [cf, 'http://localhost:3000'].filter(Boolean);
+  if (origin && allowed.includes(origin.replace(/\/$/, ''))) {
     return {
       'Access-Control-Allow-Origin': origin,
       'Access-Control-Allow-Credentials': 'true',
-      'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Amz-User-Agent',
-      'Access-Control-Allow-Methods': 'OPTIONS,GET,POST,PUT,DELETE',
+      'Access-Control-Allow-Headers': 'Content-Type,Authorization',
+      'Access-Control-Allow-Methods': 'OPTIONS,GET,POST',
     };
   }
-  return {}; // Return empty headers for disallowed origins
+  return {};
 };
 
-// --- Response Utility ---
-const jsonResponse = (statusCode, body, corsHeaders) => ({
-  statusCode,
-  headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+const json = (status, body, cors = {}) => ({
+  statusCode: status,
+  headers: { ...cors, 'Content-Type': 'application/json' },
   body: JSON.stringify(body),
 });
 
-// --- Logic: Get Subscribers ---
-const getSubscribers = async (topicId, corsHeaders) => {
-  const { rows } = await pool.query(
-    'SELECT p.id, p.full_name, p.email FROM topic_subscriptions ts JOIN profiles p ON p.id = ts.user_id WHERE ts.topic_id = $1',
-    [topicId]
-  );
-  return jsonResponse(200, rows, corsHeaders);
+const getSubscribers = async (topicId, cors) => {
+  const subs = await queryItems(TABLES.TOPIC_SUBSCRIPTIONS, {
+    IndexName: 'topic-id-index',
+    KeyConditionExpression: 'topic_id = :tid',
+    ExpressionAttributeValues: { ':tid': topicId },
+  });
+  // Enrich with user info
+  const enriched = await Promise.all(subs.map(async (s) => {
+    const user = await getItem(TABLES.USERS, { id: s.user_id });
+    return { user_id: s.user_id, full_name: user?.full_name, email: user?.email };
+  }));
+  return json(200, enriched, cors);
 };
 
-// --- Logic: Toggle Subscription ---
-const toggleSubscription = async (userId, topicId, corsHeaders) => {
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    const { rows } = await client.query(
-      'SELECT id FROM topic_subscriptions WHERE user_id = $1 AND topic_id = $2',
-      [userId, topicId]
-    );
+const toggleSubscription = async (userId, topicId, cors) => {
+  const existing = await getItem(TABLES.TOPIC_SUBSCRIPTIONS, { user_id: userId, topic_id: topicId });
 
-    let subscribed = false;
-    if (rows.length > 0) {
-      await client.query('DELETE FROM topic_subscriptions WHERE id = $1', [rows[0].id]);
-      subscribed = false;
-    } else {
-      await client.query('INSERT INTO topic_subscriptions (user_id, topic_id) VALUES ($1, $2)', [userId, topicId]);
-      subscribed = true;
-    }
-    await client.query('COMMIT');
-    return jsonResponse(200, { success: true, subscribed }, corsHeaders);
-  } catch (error) {
-    await client.query('ROLLBACK');
-    console.error("Error in toggleSubscription:", error);
-    return jsonResponse(500, { error: 'Database transaction failed' }, corsHeaders);
-  } finally {
-    client.release();
+  if (existing) {
+    await deleteItem(TABLES.TOPIC_SUBSCRIPTIONS, { user_id: userId, topic_id: topicId });
+    return json(200, { success: true, subscribed: false }, cors);
+  } else {
+    await putItem(TABLES.TOPIC_SUBSCRIPTIONS, {
+      user_id: userId,
+      topic_id: topicId,
+      created_at: now(),
+    });
+    return json(200, { success: true, subscribed: true }, cors);
   }
 };
 
-// --- Main Lambda Handler ---
 exports.handler = async (event) => {
-  const corsHeaders = getCorsHeaders(event);
+  const cors = getCorsHeaders(event);
 
-  // Handle CORS preflight requests
-  if (event.httpMethod === 'OPTIONS') {
-    return { statusCode: 204, headers: corsHeaders, body: '' };
-  }
-  
-  // Verify origin is allowed
-  if (!corsHeaders['Access-Control-Allow-Origin']) {
-    return jsonResponse(403, { error: "Origin not allowed" }, {});
-  }
+  if (event.httpMethod === 'OPTIONS')
+    return { statusCode: 204, headers: cors, body: '' };
 
-  const { httpMethod, path, pathParameters, requestContext } = event;
+  const topicId = event.pathParameters?.topicId;
+  if (!topicId) return json(400, { error: 'Missing topicId' }, cors);
 
-  const topicId = pathParameters?.topicId;
-  if (!topicId) {
-    return jsonResponse(400, { error: "Missing topicId in path" }, corsHeaders);
-  }
+  const userId = event.requestContext?.authorizer?.claims?.sub;
+  if (!userId) return json(401, { error: 'Unauthorized' }, cors);
 
-  const userId = requestContext.authorizer?.claims?.sub;
-  if (!userId) {
-    return jsonResponse(401, { error: 'Unauthorized' }, corsHeaders);
-  }
-
-  const pathSuffix = path.substring(path.lastIndexOf('/'));
+  const path = event.path || '';
+  const suffix = path.substring(path.lastIndexOf('/'));
 
   try {
-    if (httpMethod === 'POST' && pathSuffix === '/subscription') {
-      return await toggleSubscription(userId, topicId, corsHeaders);
-    }
-    if (httpMethod === 'GET' && pathSuffix === '/subscribers') {
-      return await getSubscribers(topicId, corsHeaders);
-    }
-    return jsonResponse(404, { error: 'Not Found' }, corsHeaders);
-  } catch (error) {
-    console.error('Lambda execution error:', error);
-    return jsonResponse(500, { error: 'Internal Server Error' }, corsHeaders);
+    if (event.httpMethod === 'POST' && suffix === '/subscription')
+      return await toggleSubscription(userId, topicId, cors);
+    if (event.httpMethod === 'GET' && suffix === '/subscribers')
+      return await getSubscribers(topicId, cors);
+    return json(404, { error: 'Not Found' }, cors);
+  } catch (err) {
+    console.error('topic-subscribers-lambda error:', err.message);
+    return json(500, { error: 'Internal Server Error', details: err.message }, cors);
   }
 };

@@ -18,6 +18,7 @@ import PaymentsDashboardPage from './pages/PaymentsDashboardPage';
 import OrdersHealthDashboardPage from './pages/OrdersHealthDashboardPage';
 import OrderTrackingPage from './pages/OrderTrackingPage';
 import InventoryHealthPage from './pages/InventoryHealthPage';
+import OrderMonitoringPage from './pages/OrderMonitoringPage';
 import { Sidebar } from './components/layout/Sidebar';
 import IntegrationPage from './pages/IntegrationPage';
 import { SettingsModal } from './components/layout/SettingsModal';
@@ -81,6 +82,7 @@ function App() {
     if (path.startsWith('/topic-manager')) return 'topic-manager';
     if (path.startsWith('/integrations')) return 'integrations';
     if (path.startsWith('/user-management')) return 'user-management';
+    if (path.startsWith('/order-monitoring')) return 'order-monitoring';
     return 'dashboard';
   }, [location.pathname]);
 
@@ -443,6 +445,7 @@ function App() {
                 <Route path="/orders-health" element={<OrdersHealthDashboardPage user={profile} onLogout={handleLogout} onNavigate={handleNavigate} isSidebarOpen={isSidebarOpen} setIsSidebarOpen={setIsSidebarOpen} notifications={notifications} openSettings={() => setIsSettingsOpen(true)} systemStatus={systemStatus} />} />
                 <Route path="/inventory-health" element={<InventoryHealthPage user={profile} onLogout={handleLogout} onNavigate={handleNavigate} isSidebarOpen={isSidebarOpen} setIsSidebarOpen={setIsSidebarOpen} notifications={notifications} openSettings={() => setIsSettingsOpen(true)} systemStatus={systemStatus} />} />
                 <Route path="/order-tracking/:orderId" element={<OrderTrackingPage user={profile} isSidebarOpen={isSidebarOpen} setIsSidebarOpen={setIsSidebarOpen} onLogout={handleLogout} onNavigate={handleNavigate} notifications={notifications} openSettings={() => setIsSettingsOpen(true)} systemStatus={systemStatus} />} />
+                <Route path="/order-monitoring" element={<OrderMonitoringPage />} />
                 {profile && <Route path="/analytics" element={ <AnalyticsPage user={profile} onLogout={handleLogout} onNavigate={handleNavigate} isSidebarOpen={isSidebarOpen} setIsSidebarOpen={setIsSidebarOpen} notifications={notifications} openSettings={() => setIsSettingsOpen(true)} systemStatus={systemStatus} topics={topics} /> } />}
                 <Route path="/topic-manager" element={<TopicManagerPage onLogout={handleLogout} onNavigate={handleNavigate} isSidebarOpen={isSidebarOpen} setIsSidebarOpen={setIsSidebarOpen} notifications={notifications} openSettings={() => setIsSettingsOpen(true)} systemStatus={systemStatus} onAddTopic={handleAddTopic} onToggleSubscription={handleToggleSubscription} onDeleteTopic={handleDeleteTopic} topics={topics} profile={profile} />}/>
                 <Route path="/profile" element={<ProfilePage profile={profile} addToast={addSimpleToast} onNavigate={handleNavigate} />} />
