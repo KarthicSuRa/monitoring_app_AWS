@@ -11,6 +11,8 @@ infrastructure/cdk.out/
 infrastructure/node_modules/
 infrastructure/yarn.lock
 infrastructure/package-lock.json
+infrastructure/lib/service-account-credentials.json
+
 
 # Lambda dependencies
 lambdas/node_modules/
