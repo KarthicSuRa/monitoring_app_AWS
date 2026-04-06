@@ -62,18 +62,18 @@ const NavItem: React.FC<{
             onNavigate(item.page);
           }
         }}
-        className={`flex items-center justify-between gap-4 rounded-md px-3 py-3 text-base font-medium transition-all ${
+        className={`flex items-center justify-between gap-3 rounded-md px-3 py-2 text-sm font-medium transition-all ${
           (currentPage === item.page || isParentActive)
             ? 'bg-slate-800 text-white'
             : 'hover:bg-slate-700/50 hover:text-white'
         }`}
       >
-        <div className="flex items-center gap-4">
-          <Icon name={item.icon} className="h-6 w-6" />
+        <div className="flex items-center gap-3">
+          <Icon name={item.icon} className="h-5 w-5" />
           {item.name}
         </div>
         {hasSubItems && (
-          <Icon name={isSubMenuOpen ? 'chevron-up' : 'chevron-down'} className="h-5 w-5" />
+          <Icon name={isSubMenuOpen ? 'chevron-up' : 'chevron-down'} className="h-4 w-4" />
         )}
       </a>
       {hasSubItems && isSubMenuOpen && (
@@ -83,7 +83,7 @@ const NavItem: React.FC<{
               key={subItem.name}
               href="#"
               onClick={(e) => { e.preventDefault(); onNavigate(subItem.page); }}
-              className={`flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-all ${
+              className={`flex items-center gap-3 rounded-md px-3 py-1.5 text-xs font-medium transition-all ${
                 currentPage === subItem.page
                   ? 'text-white'
                   : 'text-slate-400 hover:text-white'
@@ -110,16 +110,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <>
             {isSidebarOpen && <div className="fixed inset-0 bg-black/60 z-30 md:hidden" onClick={() => setIsSidebarOpen(false)}></div>}
             <aside 
-                className={`fixed top-0 left-0 z-40 h-screen w-72 bg-slate-900 text-slate-300 flex flex-col transition-transform duration-300 ease-in-out md:translate-x-0 ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}
+                className={`fixed top-0 left-0 z-40 h-screen w-64 bg-slate-900 text-slate-300 flex flex-col transition-transform duration-300 ease-in-out md:translate-x-0 ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}
             >
-                <div className="h-20 flex items-center justify-center px-6 border-b border-slate-700 shrink-0">
-                    <button onClick={() => onNavigate('dashboard')} className="flex items-center gap-3 text-white">
-                         <Icon name="mcmLogo" className="h-8 w-8" />
-                        <span className="text-xl sm:text-2xl font-bold">MCM Alerts</span>
+                <div className="h-16 flex items-center justify-center px-4 border-b border-slate-700 shrink-0">
+                    <button onClick={() => onNavigate('dashboard')} className="flex items-center gap-2 text-white">
+                         <Icon name="mcmLogo" className="h-7 w-7" />
+                        <span className="text-lg font-bold">MCM Alerts</span>
                     </button>
                 </div>
 
-                <nav className="flex-1 px-4 py-4 space-y-2">
+                <nav className="flex-1 px-3 py-3 space-y-1">
                     {navItems.map(item => (
                         <NavItem key={item.name} item={item} currentPage={currentPage} onNavigate={onNavigate} />
                     ))}
@@ -127,24 +127,24 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         <a
                             href="#"
                             onClick={(e) => { e.preventDefault(); onNavigate('user-management'); }}
-                            className={`flex items-center gap-4 rounded-md px-3 py-3 text-base font-medium transition-all ${
+                            className={`flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-all ${
                                 currentPage === 'user-management'
                                     ? 'bg-slate-800 text-white'
                                     : 'hover:bg-slate-700/50 hover:text-white'
                             }`}
                         >
-                            <Icon name="users" className="h-6 w-6" />
+                            <Icon name="users" className="h-5 w-5" />
                             User Management
                         </a>
                     )}
                 </nav>
 
-                <div className="px-4 py-4 mt-auto border-t border-slate-700">
+                <div className="px-3 py-3 mt-auto border-t border-slate-700">
                     <button 
                         onClick={onSendTestAlert}
-                        className="w-full bg-blue-600 text-white font-semibold py-3 rounded-md hover:bg-blue-700 transition-all flex items-center justify-center gap-2 text-base"
+                        className="w-full bg-blue-600 text-white font-semibold py-2 rounded-md hover:bg-blue-700 transition-all flex items-center justify-center gap-2 text-sm"
                     >
-                        <Icon name="bell" className="h-5 w-5" />
+                        <Icon name="bell" className="h-4 w-4" />
                         Send Test Alert
                     </button>
                 </div>

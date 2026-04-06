@@ -144,7 +144,7 @@ const UserManagementPage: React.FC<UserManagementPageProps> = ({
     }, [user]);
 
     return (
-        <div className="flex flex-col h-screen bg-background md:ml-72">
+        <div className="flex flex-col h-screen bg-base-200 md:ml-72">
             <Header
                 onNavigate={onNavigate}
                 onLogout={onLogout}
@@ -156,63 +156,45 @@ const UserManagementPage: React.FC<UserManagementPageProps> = ({
                 profile={userProfile}
                 title="User & Team Management"
             />
-            <main className="flex-1 overflow-y-auto">
+            <main className="flex-1 overflow-y-auto p-4 md:p-8">
                 {loading ? (
-                    <div className="p-4 text-center">Loading...</div>
+                    <div className="flex justify-center items-center h-full">
+                        <span className="loading loading-spinner loading-lg"></span>
+                    </div>
                 ) : (
-                    <div className="p-4 md:p-8">
-                        <div className="mb-6 border-b border-gray-200 dark:border-gray-700">
-                            <nav className="-mb-px flex space-x-6" aria-label="Tabs">
-                                <button
-                                    onClick={() => setActiveTab('users')}
-                                    className={`${ 
-                                        activeTab === 'users'
-                                            ? 'border-indigo-500 text-indigo-600'
-                                            : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                                    } whitespace-nowrap py-3 px-1 border-b-2 font-medium text-sm`}
-                                >
-                                    Users
-                                </button>
-                                <button
-                                    onClick={() => setActiveTab('teams')}
-                                    className={`${ 
-                                        activeTab === 'teams'
-                                            ? 'border-indigo-500 text-indigo-600'
-                                            : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                                    } whitespace-nowrap py-3 px-1 border-b-2 font-medium text-sm`}
-                                >
-                                    Teams
-                                </button>
-                            </nav>
+                    <>
+                        <div className="tabs tabs-boxed mb-6 bg-base-100">
+                            <a className={`tab ${activeTab === 'users' ? 'tab-active' : ''}`} onClick={() => setActiveTab('users')}>Users</a> 
+                            <a className={`tab ${activeTab === 'teams' ? 'tab-active' : ''}`} onClick={() => setActiveTab('teams')}>Teams</a> 
                         </div>
 
                         {activeTab === 'users' && (
-                            <div>
-                                <h2 className="text-xl font-semibold mb-3 text-foreground">All Users</h2>
-                                <div className="bg-card dark:bg-gray-800 rounded-lg shadow border border-border dark:border-gray-700 overflow-hidden">
+                            <div className="card bg-base-100 shadow-xl">
+                                <div className="card-body">
+                                    <h2 className="card-title">All Users</h2>
                                     <div className="overflow-x-auto">
-                                        <table className="min-w-full divide-y divide-border dark:divide-gray-700">
-                                            <thead className="bg-muted/50 dark:bg-gray-700">
+                                        <table className="table w-full">
+                                            <thead>
                                                 <tr>
-                                                    <th className="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase">Name</th>
-                                                    <th className="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase">Email</th>
-                                                    <th className="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase">App Role</th>
-                                                    <th className="px-6 py-3 text-right text-xs font-medium text-muted-foreground uppercase">Actions</th>
+                                                    <th>Name</th>
+                                                    <th>Email</th>
+                                                    <th>App Role</th>
+                                                    <th></th>
                                                 </tr>
                                             </thead>
-                                            <tbody className="bg-card dark:bg-gray-800 divide-y divide-border dark:divide-gray-700">
+                                            <tbody>
                                                 {users.map(user => (
                                                     <tr key={user.id}>
-                                                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-card-foreground dark:text-white">{user.full_name || '-'}</td>
-                                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-muted-foreground dark:text-gray-400">{user.email}</td>
-                                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-muted-foreground dark:text-gray-400">{user.app_role}</td>
-                                                        <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                                                        <td>{user.full_name || 'N/A'}</td>
+                                                        <td>{user.email}</td>
+                                                        <td><span className="badge badge-ghost">{user.app_role}</span></td>
+                                                        <td>
                                                             <button
+                                                                className="btn btn-sm btn-outline btn-primary"
                                                                 onClick={() => {
                                                                     setEditingUser(user);
                                                                     setEditedFields({ full_name: user.full_name || '', app_role: user.app_role || 'member' });
                                                                 }}
-                                                                className="text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-300"
                                                             >
                                                                 Edit
                                                             </button>
@@ -227,40 +209,35 @@ const UserManagementPage: React.FC<UserManagementPageProps> = ({
                         )}
 
                         {activeTab === 'teams' && (
-                             <div>
-                                <h2 className="text-xl font-semibold mb-3 text-foreground">All Teams</h2>
-                                <div className="bg-card dark:bg-gray-800 rounded-lg shadow border border-border dark:border-gray-700 p-4">
-                                    <div className="flex gap-2 mb-4">
+                             <div className="card bg-base-100 shadow-xl">
+                                <div className="card-body">
+                                    <h2 className="card-title">All Teams</h2>
+                                     <div className="flex gap-2 my-4">
                                         <input
                                             type="text"
                                             value={newTeamName}
                                             onChange={(e) => setNewTeamName(e.target.value)}
                                             placeholder="New team name..."
-                                            className="flex-grow px-3 py-2 border rounded-md text-sm bg-input text-foreground border-border"
+                                            className="input input-bordered w-full"
                                         />
-                                        <button
-                                            onClick={createTeam}
-                                            className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 text-sm font-semibold"
-                                        >
-                                            Create Team
-                                        </button>
+                                        <button onClick={createTeam} className="btn btn-primary">Create Team</button>
                                     </div>
                                     <div className="overflow-x-auto">
-                                        <table className="min-w-full divide-y divide-border dark:divide-gray-700">
-                                            <thead className="bg-muted/50 dark:bg-gray-700">
+                                        <table className="table w-full">
+                                            <thead>
                                                 <tr>
-                                                    <th className="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase">Name</th>
-                                                    <th className="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase">Members</th>
-                                                    <th className="px-6 py-3 text-right text-xs font-medium text-muted-foreground uppercase">Actions</th>
+                                                    <th>Name</th>
+                                                    <th>Members</th>
+                                                    <th></th>
                                                 </tr>
                                             </thead>
-                                            <tbody className="bg-card dark:bg-gray-800 divide-y divide-border dark:divide-gray-700">
+                                            <tbody>
                                                 {teams.map(team => (
                                                     <tr key={team.id}>
-                                                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-card-foreground dark:text-white">{team.name}</td>
-                                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-muted-foreground dark:text-gray-400">{team.members.length}</td>
-                                                        <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                                                            <button onClick={() => setManagingTeam(team)} className="text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-300">
+                                                        <td>{team.name}</td>
+                                                        <td>{team.members.length}</td>
+                                                        <td>
+                                                            <button onClick={() => setManagingTeam(team)} className="btn btn-sm btn-outline btn-secondary">
                                                                 Manage
                                                             </button>
                                                         </td>
@@ -272,110 +249,104 @@ const UserManagementPage: React.FC<UserManagementPageProps> = ({
                                 </div>
                             </div>
                         )}
-                    </div>
+                    </>
                 )}
             </main>
 
             {editingUser && (
-                <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
-                    <div className="relative bg-card rounded-lg shadow-xl w-full max-w-lg">
-                        <div className="flex items-start justify-between p-4 border-b rounded-t">
-                            <h3 className="text-xl font-semibold text-foreground">Edit User: {editingUser.email}</h3>
-                            <button type="button" className="text-gray-400 bg-transparent hover:bg-gray-200 hover:text-gray-900 rounded-lg text-sm p-1.5 ml-auto inline-flex items-center" onClick={() => setEditingUser(null)}>
-                                <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd"></path></svg>
-                            </button>
-                        </div>
-                        <div className="p-6 space-y-4">
-                            <div>
-                                <label htmlFor="fullName" className="block mb-2 text-sm font-medium text-foreground">Full Name</label>
+                 <div className="modal modal-open">
+                    <div className="modal-box w-11/12 max-w-lg">
+                         <button onClick={() => setEditingUser(null)} className="btn btn-sm btn-circle btn-ghost absolute right-2 top-2">✕</button>
+                        <h3 className="font-bold text-lg">Edit User: {editingUser.email}</h3>
+                        <div className="py-4 space-y-4">
+                            <div className="form-control">
+                                <label className="label"><span className="label-text">Full Name</span></label>
                                 <input
                                     type="text"
-                                    id="fullName"
                                     value={editedFields.full_name}
                                     onChange={(e) => setEditedFields({ ...editedFields, full_name: e.target.value })}
-                                    className="w-full px-3 py-2 border rounded-md text-sm bg-input text-foreground border-border"
+                                    className="input input-bordered w-full"
                                     placeholder="Enter full name"
                                 />
                             </div>
-                            <div>
-                                <label htmlFor="appRole" className="block mb-2 text-sm font-medium text-foreground">App Role</label>
+                           <div className="form-control">
+                                <label className="label"><span className="label-text">App Role</span></label>
                                 <select
-                                    id="appRole"
                                     value={editedFields.app_role}
                                     onChange={(e) => setEditedFields({ ...editedFields, app_role: e.target.value })}
-                                    className="w-full px-3 py-2 border rounded-md text-sm bg-input text-foreground border-border"
+                                    className="select select-bordered w-full"
                                 >
                                     <option value="member">member</option>
                                     <option value="super_admin">super_admin</option>
                                 </select>
                             </div>
                         </div>
-                        <div className="flex items-center p-6 space-x-2 border-t border-border rounded-b">
-                            <button onClick={handleUpdateUser} type="button" className="text-white bg-blue-700 hover:bg-blue-800 focus:ring-4 focus:outline-none focus:ring-blue-300 font-medium rounded-lg text-sm px-5 py-2.5 text-center">Save Changes</button>
-                            <button onClick={() => setEditingUser(null)} type="button" className="text-gray-500 bg-white hover:bg-gray-100 focus:ring-4 focus:outline-none focus:ring-gray-200 rounded-lg border border-gray-200 text-sm font-medium px-5 py-2.5 hover:text-gray-900 focus:z-10">Cancel</button>
+                        <div className="modal-action">
+                            <button onClick={handleUpdateUser} className="btn btn-primary">Save Changes</button>
+                            <button onClick={() => setEditingUser(null)} className="btn">Cancel</button>
                         </div>
                     </div>
                 </div>
             )}
 
             {managingTeam && (
-                <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
-                    <div className="relative bg-card rounded-lg shadow-xl w-full max-w-4xl">
-                        <div className="flex items-start justify-between p-4 border-b border-border rounded-t">
-                            <h3 className="text-xl font-semibold text-foreground">Manage Team: {managingTeam.name}</h3>
-                            <button type="button" className="text-gray-400 bg-transparent hover:bg-gray-200 hover:text-gray-900 rounded-lg text-sm p-1.5 ml-auto inline-flex items-center" onClick={() => setManagingTeam(null)}>
-                                <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd"></path></svg>
-                            </button>
-                        </div>
+                <div className="modal modal-open">
+                    <div className="modal-box w-11/12 max-w-4xl">
+                        <button onClick={() => setManagingTeam(null)} className="btn btn-sm btn-circle btn-ghost absolute right-2 top-2">✕</button>
+                        <h3 className="font-bold text-lg">Manage Team: {managingTeam.name}</h3>
                         
-                        <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div className="py-4 grid grid-cols-1 md:grid-cols-2 gap-6">
                             <div className="space-y-6">
-                                <div>
-                                    <h4 className="font-semibold text-foreground mb-2">Add Member</h4>
-                                    <div className="flex gap-2">
-                                        <select value={userToAdd} onChange={(e) => setUserToAdd(e.target.value)} className="flex-grow px-3 py-2 border rounded-md text-sm bg-input text-foreground border-border">
+                                <div className="form-control">
+                                    <label className="label"><span className="label-text">Add Member</span></label>
+                                    <div className="join">
+                                        <select value={userToAdd} onChange={(e) => setUserToAdd(e.target.value)} className="select select-bordered join-item w-full">
                                             <option value="">Select a user...</option>
                                             {usersNotInTeam.map(user => <option key={user.id} value={user.id}>{user.full_name || user.email}</option>)}
                                         </select>
-                                        <button onClick={addMemberToTeam} className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 text-sm font-semibold">Add</button>
+                                        <button onClick={addMemberToTeam} className="btn btn-primary join-item">Add</button>
                                     </div>
                                 </div>
 
-                                <div>
-                                    <h4 className="font-semibold text-foreground mb-2">Current Members ({managingTeam.members.length})</h4>
-                                    <ul className="divide-y divide-border border rounded-md max-h-60 overflow-y-auto">
+                                <div className="form-control">
+                                    <label className="label"><span className="label-text">Current Members ({managingTeam.members.length})</span></label>
+                                    <div className="overflow-x-auto h-60 border rounded-box">
+                                    <table className="table table-zebra w-full">
+                                        <tbody>
                                         {managingTeam.members.map(member => (
-                                            <li key={member.id} className="px-4 py-3 flex justify-between items-center">
-                                                <div>
-                                                    <p className="text-sm font-medium text-card-foreground">{member.full_name}</p>
-                                                    <p className="text-sm text-muted-foreground">{member.email}</p>
-                                                </div>
-                                                <button onClick={() => removeMemberFromTeam(member.id)} className="text-red-500 hover:text-red-700 text-sm font-semibold">Remove</button>
-                                            </li>
+                                            <tr key={member.id}>
+                                                <td>
+                                                    <div className="font-bold">{member.full_name}</div>
+                                                    <div className="text-sm opacity-50">{member.email}</div>
+                                                </td>
+                                                <td><button onClick={() => removeMemberFromTeam(member.id)} className="btn btn-xs btn-error">Remove</button></td>
+                                            </tr>
                                         ))}
-                                        {managingTeam.members.length === 0 && <li className="px-4 py-3 text-sm text-muted-foreground text-center">No members in this team yet.</li>}
-                                    </ul>
+                                        </tbody>
+                                    </table>
+                                     {managingTeam.members.length === 0 && <p className="p-4 text-center text-base-content/60">No members in this team yet.</p>}
+                                    </div>
                                 </div>
                             </div>
 
-                            <div>
-                                <h4 className="font-semibold text-foreground mb-2">Topic Assignments</h4>
-                                <div className="divide-y divide-border border rounded-md max-h-[22rem] overflow-y-auto">
+                             <div className="form-control">
+                                <label className="label"><span className="label-text">Topic Assignments</span></label>
+                                <div className="overflow-y-auto h-96 border rounded-box">
                                     {topicsForTeam.map(topic => (
-                                        <div key={topic.id} className="px-4 py-3 flex justify-between items-center">
+                                        <div key={topic.id} className="p-4 flex justify-between items-center border-b">
                                             <div>
-                                                <p className="text-sm font-medium text-card-foreground">{topic.name}</p>
-                                                <p className="text-sm text-muted-foreground">{topic.description || 'No description'}</p>
+                                                <p className="font-medium">{topic.name}</p>
+                                                <p className="text-sm text-base-content/60">{topic.description || 'No description'}</p>
                                             </div>
                                             <input 
                                                 type="checkbox" 
                                                 checked={topic.isAssigned}
                                                 onChange={() => onUpdateTopicTeam(topic.id, topic.isAssigned ? null : managingTeam.id)}
-                                                className="h-5 w-5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                                                className="toggle toggle-primary"
                                             />
                                         </div>
                                     ))}
-                                    {topicsForTeam.length === 0 && <div className="px-4 py-3 text-sm text-muted-foreground text-center">No topics available to assign.</div>}
+                                    {topicsForTeam.length === 0 && <p className="p-4 text-center text-base-content/60">No topics available to assign.</p>}
                                 </div>
                             </div>
                         </div>

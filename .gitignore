@@ -1,0 +1,23 @@
+# Node.js
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Client build artifacts
+client/dist/
+
+# Infrastructure build artifacts
+infrastructure/cdk.out/
+infrastructure/node_modules/
+infrastructure/yarn.lock
+infrastructure/package-lock.json
+
+# Lambda dependencies
+lambdas/node_modules/
+lambdas/yarn.lock
+lambdas/package-lock.json
+
+# IDE & OS files
+.idea/
+.vscode/
+*.DS_Store

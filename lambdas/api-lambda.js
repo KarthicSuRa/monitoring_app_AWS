@@ -1,5 +1,15 @@
 const { Pool } = require("pg");
-const { CognitoJwtVerifier } = require("aws-jwt-verify");
+const {
+    SNSClient,
+    CreatePlatformEndpointCommand,
+    DeleteEndpointCommand,
+    SubscribeCommand,
+    UnsubscribeCommand,
+    GetEndpointAttributesCommand,
+    SetEndpointAttributesCommand,
+} = require("@aws-sdk/client-sns");
+
+const snsClient = new SNSClient({});
 
 // Centralized CORS configuration
 const getCorsHeaders = (event) => {
@@ -7,14 +17,16 @@ const getCorsHeaders = (event) => {
     const cloudfrontUrl = process.env.CLOUDFRONT_URL ? process.env.CLOUDFRONT_URL.replace(/\/$/, '') : '';
     const normalizedOrigin = origin.replace(/\/$/, '');
     const allowedOrigins = [cloudfrontUrl, 'http://localhost:3000'].filter(Boolean);
+
     if (origin && (allowedOrigins.includes(normalizedOrigin) || allowedOrigins.includes(origin))) {
         return {
             'Access-Control-Allow-Origin': origin,
-            'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Amz-Date, X-Api-Key, X-Amz-Security-Token',
-            'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+            'Access-Control-Allow-Credentials': 'true',
+            'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Amz-User-Agent',
+            'Access-Control-Allow-Methods': 'OPTIONS,POST,GET,PUT,DELETE',
         };
     }
-    return !origin ? { 'Content-Type': 'application/json' } : {};
+    return {};
 };
 
 const jsonResponse = (statusCode, body, headers = {}, corsHeaders = {}) => ({
@@ -25,23 +37,14 @@ const jsonResponse = (statusCode, body, headers = {}, corsHeaders = {}) => ({
 
 
 // =============================================================
-//  DATABASE & AUTH
+//  DATABASE
 // =============================================================
 
 let pool;
 const initializePool = () => {
   if (!pool) {
     const { DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD } = process.env;
-    // DIAG_DB_ENV: Log which env vars are present so you can spot missing ones in CloudWatch
-    console.log('[DIAG_DB_ENV] DB_HOST:', DB_HOST ? `SET (${DB_HOST})` : 'MISSING');
-    console.log('[DIAG_DB_ENV] DB_PORT:', DB_PORT ? `SET (${DB_PORT})` : 'MISSING');
-    console.log('[DIAG_DB_ENV] DB_NAME:', DB_NAME ? `SET (${DB_NAME})` : 'MISSING');
-    console.log('[DIAG_DB_ENV] DB_USER:', DB_USER ? `SET (${DB_USER})` : 'MISSING');
-    console.log('[DIAG_DB_ENV] DB_PASSWORD:', DB_PASSWORD ? 'SET (hidden)' : 'MISSING');
-    console.log('[DIAG_DB_ENV] COGNITO_USER_POOL_ID:', process.env.COGNITO_USER_POOL_ID ? 'SET' : 'MISSING');
-    console.log('[DIAG_DB_ENV] COGNITO_CLIENT_ID:', process.env.COGNITO_CLIENT_ID ? 'SET' : 'MISSING');
     if (!DB_HOST || !DB_PORT || !DB_NAME || !DB_USER || !DB_PASSWORD) {
-        console.error('[DIAG_DB_ENV] FATAL: One or more required DB env vars are missing. Aborting pool creation.');
         throw new Error('Database connection environment variables are not fully set.');
     }
     pool = new Pool({
@@ -49,36 +52,10 @@ const initializePool = () => {
         ssl: { rejectUnauthorized: false },
         connectionTimeoutMillis: 10000,
     });
-    console.log('[DIAG_DB_ENV] Database pool created successfully.');
   }
 };
 
-const verifier = CognitoJwtVerifier.create({
-  userPoolId: process.env.COGNITO_USER_POOL_ID,
-  tokenUse: "id",
-  clientId: process.env.COGNITO_CLIENT_ID,
-});
-
-const authenticate = async (event) => {
-  const authHeader = event.headers?.authorization || event.headers?.Authorization;
-  if (!authHeader) {
-    console.warn('[DIAG_AUTH] Missing Authorization header in request');
-    return { authenticated: false, error: 'Missing Authorization header' };
-  }
-  const token = authHeader.split(' ')[1];
-  if (!token) {
-    console.warn('[DIAG_AUTH] Authorization header present but token missing (bad format)');
-    return { authenticated: false, error: 'Invalid token format' };
-  }
-  try {
-    const payload = await verifier.verify(token);
-    console.log('[DIAG_AUTH] JWT verified OK for sub:', payload.sub);
-    return { authenticated: true, user: { id: payload.sub, email: payload.email, app_role: payload['custom:app_role'] || 'member' } };
-  } catch (error) {
-    console.error('[DIAG_AUTH] JWT verification FAILED:', error.name, error.message);
-    return { authenticated: false, error: 'Invalid token' };
-  }
-};
+initializePool();
 
 // =============================================================
 //  API HANDLERS
@@ -309,17 +286,106 @@ const handleEmails = async (client, method, path, body, corsHeaders) => {
     return jsonResponse(405, { error: `Method ${method} Not Allowed on /emails` }, {}, corsHeaders);
 };
 
-const handlePushSubscriptions = async (method, corsHeaders) => {
-    if (method === 'DELETE' || method === 'POST') {
-        return jsonResponse(200, {
-            success: true,
-            message: 'Push subscription managed client-side via OneSignal.'
-        }, {}, corsHeaders);
+const handlePushSubscriptions = async (client, method, body, user, corsHeaders, event) => {
+    const { SNS_PLATFORM_APPLICATION_ARN, SNS_TOPIC_ARN } = process.env;
+
+    if (!SNS_PLATFORM_APPLICATION_ARN || !SNS_TOPIC_ARN) {
+        console.error('SNS environment variables are not set.');
+        return jsonResponse(500, { error: 'Push notifications are not configured on the server.' }, {}, corsHeaders);
     }
-    return jsonResponse(405, {
-        error: `Method ${method} Not Allowed on /push-subscriptions`
-    }, {}, corsHeaders);
+
+    if (method === 'POST') {
+        const { token } = body;
+        if (!token) {
+            return jsonResponse(400, { error: 'Device token is required.' }, {}, corsHeaders);
+        }
+        try {
+            // 1. Create Platform Endpoint in SNS
+            const createEndpointCmd = new CreatePlatformEndpointCommand({
+                PlatformApplicationArn: SNS_PLATFORM_APPLICATION_ARN,
+                Token: token,
+                CustomUserData: `User-ID:${user.id}`,
+            });
+            const endpointRes = await snsClient.send(createEndpointCmd);
+            const endpointArn = endpointRes.EndpointArn;
+
+            if (!endpointArn) {
+                throw new Error("Failed to create SNS platform endpoint.");
+            }
+            
+            // 2. Ensure the endpoint is enabled
+            const getAttrCmd = new GetEndpointAttributesCommand({ EndpointArn: endpointArn });
+            const attrRes = await snsClient.send(getAttrCmd);
+            if (attrRes.Attributes.Enabled !== 'true') {
+                const setAttrCmd = new SetEndpointAttributesCommand({ EndpointArn: endpointArn, Attributes: { Enabled: 'true' } });
+                await snsClient.send(setAttrCmd);
+            }
+
+            // 3. Create a subscription to the topic
+            const subscribeCmd = new SubscribeCommand({
+                TopicArn: SNS_TOPIC_ARN,
+                Protocol: 'application',
+                Endpoint: endpointArn,
+            });
+            const subscriptionRes = await snsClient.send(subscribeCmd);
+            const subscriptionArn = subscriptionRes.SubscriptionArn;
+            
+            if (!subscriptionArn) {
+                throw new Error("Failed to create SNS topic subscription.");
+            }
+
+            // 4. Store the subscription info in the database
+            await client.query(
+                `INSERT INTO public.push_subscriptions (user_id, token, endpoint_arn, subscription_arn) 
+                 VALUES ($1, $2, $3, $4)
+                 ON CONFLICT (token) DO UPDATE SET user_id = $1, endpoint_arn = $3, subscription_arn = $4`,
+                [user.id, token, endpointArn, subscriptionArn]
+            );
+
+            return jsonResponse(201, { success: true, endpointArn, subscriptionArn }, {}, corsHeaders);
+
+        } catch (error) {
+            console.error("Error creating push subscription:", error.message, error.stack);
+            return jsonResponse(500, { error: 'Failed to create push subscription.', details: error.message }, {}, corsHeaders);
+        }
+    }
+
+    if (method === 'DELETE') {
+        const token = event.queryStringParameters?.token;
+        if (!token) {
+            return jsonResponse(400, { error: 'Device token is required in query string.' }, {}, corsHeaders);
+        }
+        try {
+            // 1. Find the subscription in the database
+            const { rows } = await client.query("SELECT endpoint_arn FROM public.push_subscriptions WHERE token = $1 AND user_id = $2", [token, user.id]);
+            if (rows.length === 0) {
+                return jsonResponse(404, { error: 'Subscription not found.' }, {}, corsHeaders);
+            }
+            const endpointArn = rows[0].endpoint_arn;
+
+            // 2. Delete the Platform Endpoint from SNS (this also deletes associated subscriptions)
+            const deleteEndpointCmd = new DeleteEndpointCommand({ EndpointArn: endpointArn });
+            await snsClient.send(deleteEndpointCmd);
+
+            // 3. Delete the record from our database
+            await client.query("DELETE FROM public.push_subscriptions WHERE token = $1 AND user_id = $2", [token, user.id]);
+
+            return jsonResponse(200, { success: true }, {}, corsHeaders);
+
+        } catch (error) {
+            console.error("Error deleting push subscription:", error.message, error.stack);
+            // If the endpoint doesn't exist in SNS, it might have been deleted already. Still remove from our DB.
+            if (error.name === 'InvalidParameterException' || error.name === 'NotFoundException') {
+                 await client.query("DELETE FROM public.push_subscriptions WHERE token = $1 AND user_id = $2", [token, user.id]);
+                 return jsonResponse(200, { success: true, message: 'Cleaned up stale subscription.' }, {}, corsHeaders);
+            }
+            return jsonResponse(500, { error: 'Failed to delete push subscription.', details: error.message }, {}, corsHeaders);
+        }
+    }
+
+    return jsonResponse(405, { error: `Method ${method} Not Allowed on /push-subscriptions` }, {}, corsHeaders);
 };
+
 
 const handleMonitoring = async (client, method, event, corsHeaders) => {
     if (method !== 'GET') {
@@ -343,37 +409,39 @@ exports.handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') {
     return { statusCode: 204, headers: corsHeaders, body: '' };
   }
-
+  
+  // A check to prevent API access if the origin is not allowed.
+  const requestOrigin = (event.headers || {}).origin || '';
+  if (requestOrigin && !corsHeaders['Access-Control-Allow-Origin']) {
+      return jsonResponse(403, { error: 'CORS error: Origin not allowed' }, {});
+  }
+  
+  // For public endpoints that don't require auth, handle them here.
   if (event.path === '/synthetic-ping' && event.httpMethod === 'GET') {
       return jsonResponse(200, { message: 'Ping successful' }, {}, corsHeaders);
   }
 
-  const requestOrigin = (event.headers || {}).origin || (event.headers || {}).Origin || '';
-  if (requestOrigin && !corsHeaders['Access-Control-Allow-Origin']) {
-      return jsonResponse(403, { error: 'CORS error: Origin not allowed' }, {}, corsHeaders);
+  // All subsequent endpoints require authentication.
+  const claims = event.requestContext.authorizer?.claims;
+  if (!claims) {
+      return jsonResponse(401, { error: 'Unauthorized: No claims found in request. This is an authorizer configuration issue.' }, {}, corsHeaders);
   }
 
-  const authResult = await authenticate(event);
-  if (!authResult.authenticated) {
-    return jsonResponse(401, { error: authResult.error }, {}, corsHeaders);
-  }
+  const user = {
+      id: claims.sub,
+      email: claims.email,
+      app_role: claims['custom:app_role'] || 'member' // Default role if not present
+  };
 
-  const { user } = authResult;
   let client;
-
   try {
-    console.log(`[DIAG_REQUEST] ${event.httpMethod} ${event.path}`);
-    initializePool();
-
-    console.log('[DIAG_POOL_CONNECT] Attempting DB connection...');
     client = await pool.connect();
-    console.log('[DIAG_POOL_CONNECT] DB connection acquired successfully.');
 
-    // Ensure user exists in our DB
+    // Ensure user exists in our DB upon first authenticated request
     await client.query(
         `INSERT INTO public.users (id, email, app_role) VALUES ($1, $2, $3)
          ON CONFLICT (id) DO NOTHING`,
-        [user.id, user.email, user.app_role || 'member']
+        [user.id, user.email, user.app_role]
     );
 
     const method = event.httpMethod;
@@ -390,12 +458,12 @@ exports.handler = async (event) => {
     if (path.startsWith('/calendar'))          return await handleCalendar(client, method, path, body, corsHeaders);
     if (path.startsWith('/audit-logs'))        return await handleAuditLogs(client, method, path, body, corsHeaders);
     if (path.startsWith('/emails'))            return await handleEmails(client, method, path, body, corsHeaders);
-    if (path.startsWith('/push-subscriptions')) return await handlePushSubscriptions(method, corsHeaders);
+    if (path.startsWith('/push-subscriptions')) return await handlePushSubscriptions(client, method, body, user, corsHeaders, event);
 
     return jsonResponse(404, { error: 'Not Found' }, {}, corsHeaders);
 
   } catch (err) {
-    console.error('[DIAG_FATAL] Unhandled error in Lambda handler:', err.message, err.stack);
+    console.error('FATAL: Unhandled error in Lambda handler:', err.message, err.stack);
     return jsonResponse(500, {
       error: 'Internal Server Error',
       details: err.message,

@@ -1,4 +1,14 @@
 export const cognitoConfig = {
-    UserPoolId: 'ap-southeast-2_W0ilPUQpN',
-    ClientId: '4jj4les051058r4qlm2g5ei1tg',
+    userPoolId: 'ap-southeast-2_ArM4zHKp6',
+    userPoolClientId: '28bcc93mk4p98ig2hfftl5h0e0',
+    region: 'ap-southeast-2',
 };
+
+export const config = {
+    api: {
+        invokeUrl: 'https://qkbbr3gg6k.execute-api.ap-southeast-2.amazonaws.com/prod',
+    },
+    websocket: {
+        invokeUrl: 'wss://r0krsyou0a.execute-api.ap-southeast-2.amazonaws.com/prod',
+    }
+  };

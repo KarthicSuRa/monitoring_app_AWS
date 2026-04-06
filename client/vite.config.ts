@@ -1,18 +1,10 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
+
 const pwaOptions: any = {
-  // FIXED: Was 'injectManifest' which requires a self.__WB_MANIFEST token in sw.js.
-  // Our sw.js is a plain static file — no token → Workbox build warning.
-  // 'generateSW' means Vite generates its own SW for precaching, we keep ours for push.
-  registerType: 'prompt',
-  injectRegister: null,        // We register our own SW manually in index.tsx
   strategies: 'generateSW',
-  workbox: {
-    globPatterns: ['**/*.{js,css,html,ico,png,svg,json,wav}'],
-    // Exclude OneSignal worker files — OneSignal manages its own SW scope
-    navigateFallbackDenylist: [/OneSignal/],
-  },
+  registerType: 'autoUpdate',
   manifest: {
     name: 'MCM Alerts',
     short_name: 'MCM Alerts',
@@ -28,11 +20,30 @@ const pwaOptions: any = {
     ],
   },
   devOptions: {
-    // FIXED: Was 'true' — caused conflicts with HMR (Hot Module Reload) in dev mode.
-    // Disabled in dev; PWA features only active in production builds.
-    enabled: false,
+    enabled: true, // Enable in dev for testing
   },
+  workbox: {
+    // This will be injected into the service worker
+    globPatterns: ['**/*.{js,css,html,ico,png,svg}'],
+    runtimeCaching: [
+        {
+            urlPattern: /^https?:\/\/.*\/api\/.*/,
+            handler: 'NetworkFirst',
+            options: {
+              cacheName: 'api-cache',
+              expiration: {
+                maxEntries: 200,
+                maxAgeSeconds: 3600 // 1 hour
+              },
+              cacheableResponse: {
+                statuses: [0, 200]
+              }
+            }
+        }
+    ]
+  }
 };
+
 export default defineConfig({
   define: {
     global: 'window', // Required for amazon-cognito-identity-js

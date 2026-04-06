@@ -2,7 +2,7 @@
 
 pkgs.mkShell {
   buildInputs = [
-    pkgs.nodejs-18_x
+    pkgs.nodejs_20
     pkgs.awscli
   ];
 }

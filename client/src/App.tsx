@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { LandingPage } from './pages/LandingPage';
 import { CognitoLoginPage } from './pages/CognitoLoginPage';
@@ -22,7 +23,7 @@ import IntegrationPage from './pages/IntegrationPage';
 import { SettingsModal } from './components/layout/SettingsModal';
 import { NotificationToast } from './components/ui/NotificationToast';
 import { Theme, type Notification, SystemStatusData, NotificationUpdatePayload, Topic, MonitoredSite, User, Comment, Severity } from './types';
-import { OneSignalService } from './lib/oneSignalService';
+import { PushNotificationService } from './lib/pushNotificationService';
 import { ThemeContext } from './contexts/ThemeContext';
 import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import { SiteDetailPage } from './pages/monitoring/SiteDetailPage';
@@ -30,7 +31,7 @@ import UserManagementPage from './pages/UserManagementPage';
 import ProfilePage from './pages/Profile';
 import SyntheticMonitoringPage from './pages/monitoring/SyntheticMonitoringPage';
 import ErrorBoundary from './components/ui/ErrorBoundary';
-import { getCurrentUser, userPool } from './lib/cognitoClient';
+import { getCurrentUser, signOut } from './lib/cognitoClient';
 import { CognitoUserSession } from 'amazon-cognito-identity-js';
 import { 
   getNotifications, 
@@ -41,7 +42,8 @@ import {
   addTopic as apiAddTopic, 
   deleteTopic as apiDeleteTopic, 
   toggleTopicSubscription,
-  sendTestAlert as apiSendTestAlert
+  sendTestAlert as apiSendTestAlert,
+  connectWebSocket
 } from './lib/api';
 
 function App() {
@@ -51,7 +53,7 @@ function App() {
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [snoozedUntil, setSnoozedUntil] = useState<Date | null>(null);
   const [isPushEnabled, setIsPushEnabled] = useState(false);
-  const [isPushLoading, setIsPushLoading] = useState(false);
+  const [isPushLoading, setIsPushLoading] = useState(true);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [topics, setTopics] = useState<Topic[]>([]);
   const [toasts, setToasts] = useState<Notification[]>([]);
@@ -65,10 +67,7 @@ function App() {
   const [profileError, setProfileError] = useState<string | null>(null);
   const navigate = useNavigate();
   const location = useLocation();
-  const oneSignalService = OneSignalService.getInstance();
   const dataFetched = useRef(false);
-  const pollingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const lastNotificationIdRef = useRef<string | null>(null);
 
   const currentPage = useMemo(() => {
     const path = location.pathname;
@@ -114,12 +113,15 @@ function App() {
     last_updated: new Date().toISOString(),
     service: 'Ready',
     database: 'Connected',
-    push: 'OneSignal',
+    push: 'SNS',
     subscription: isPushEnabled ? 'Active' : 'Inactive',
   }), [isPushEnabled]);
 
   const handleNewNotification = useCallback((notification: Notification) => {
       console.log('🔔 Handling new notification:', notification.title);
+      if (notifications.some(n => n.id === notification.id)) {
+        return;
+      }
       setNotifications(prev => [notification, ...prev]);
       addToast(notification);
   
@@ -131,35 +133,89 @@ function App() {
           console.error("Error playing sound:", error);
         }
       }
-    }, [soundEnabled, addToast]);
+    }, [soundEnabled, addToast, notifications]);
 
   useEffect(() => {
-    const checkSession = async () => {
-      setAuthLoading(true);
-      try {
-        const userSession: CognitoUserSession | null = await getCurrentUser();
-        if (userSession) {
-            const idToken = userSession.getIdToken().getJwtToken();
-            const payload = JSON.parse(atob(idToken.split('.')[1]));
-            setProfile({
-                id: payload.sub, // Use 'sub' for unique user ID
-                full_name: payload.name,
-                email: payload.email,
-                avatar_url: payload.picture,
-                app_role: 'super_admin'
-            });
+    const handlePushMessage = (event: MessageEvent) => {
+        if (event.data && event.data.type === 'PUSH_NOTIFICATION') {
+            console.log('📨 Received push message from service worker:', event.data.notification);
+            const newNotification: Notification = event.data.notification;
+            handleNewNotification(newNotification);
         }
-      } catch (error: any) {
-        console.error("Error checking session:", error);
-      } finally {
-        setAuthLoading(false);
-      }
     };
 
-    checkSession();
+    navigator.serviceWorker.addEventListener('message', handlePushMessage);
+
+    // WebSocket connection
+    if (profile) {
+      const cleanup = connectWebSocket(handleNewNotification);
+      return () => {
+        cleanup();
+        navigator.serviceWorker.removeEventListener('message', handlePushMessage);
+      };
+    }
+
+    return () => {
+        navigator.serviceWorker.removeEventListener('message', handlePushMessage);
+    };
+  }, [profile, handleNewNotification]);
+
+  const fetchInitialData = useCallback(async () => {
+    if (dataFetched.current) return;
+    setDataLoading(true);
+    setProfileLoading(true);
+    try {
+      console.log('📊 Fetching initial data...');
+      const [notificationsData, topicsData, sitesData] = await Promise.all([
+        getNotifications(),
+        getTopics(),
+        getSites()
+      ]);
+      
+      setNotifications(notificationsData || []);
+      const mappedTopics = topicsData.map((t: any) => ({ ...t, subscribed: t.is_subscribed }));
+      setTopics(mappedTopics || []);
+      setSites(sitesData || []);
+      console.log('✅ Initial data fetched successfully');
+      dataFetched.current = true;
+    } catch (error: any) {
+      console.error('❌ Error fetching initial data:', error);
+      setProfileError('Failed to load dashboard data. Please try again later.');
+    } finally {
+      setDataLoading(false);
+      setProfileLoading(false);
+      setLoadingSites(false);
+    }
   }, []);
+
+  const checkSession = useCallback(async () => {
+    setAuthLoading(true);
+    try {
+      const userSession: CognitoUserSession | null = await getCurrentUser();
+      if (userSession) {
+        const idToken = userSession.getIdToken().getJwtToken();
+        const payload = JSON.parse(atob(idToken.split('.')[1]));
+        setProfile({
+            id: payload.sub,
+            full_name: payload.name || 'Anonymous User',
+            email: payload.email,
+            avatar_url: payload.picture,
+            app_role: 'super_admin'
+        });
+        await fetchInitialData();
+      }
+    } catch (error: any) {
+      console.warn("No active session:", error);
+    } finally {
+      setAuthLoading(false);
+    }
+  }, [fetchInitialData]);
+
+  useEffect(() => {
+    checkSession();
+  }, [checkSession]);
   
-  const handleLoginSuccess = async () => {
+  const handleLoginSuccess = useCallback(async () => {
       setAuthLoading(true);
       try {
         const userSession: CognitoUserSession | null = await getCurrentUser();
@@ -173,6 +229,7 @@ function App() {
                 avatar_url: payload.picture,
                 app_role: 'super_admin'
             });
+            await fetchInitialData();
         }
         navigate('/');
       } catch (error: any) {
@@ -180,112 +237,22 @@ function App() {
       } finally {
         setAuthLoading(false);
       }
-  };
+  }, [fetchInitialData, navigate]);
 
   useEffect(() => {
-    if (profile && !dataFetched.current) {
-      const fetchInitialData = async () => {
-        setDataLoading(true);
-        setProfileLoading(true);
-        try {
-          console.log('📊 Fetching initial data...');
-          const [notificationsData, topicsData, sitesData] = await Promise.all([
-            getNotifications(),
-            getTopics(),
-            getSites()
-          ]);
-          
-          setNotifications(notificationsData || []);
-          const mappedTopics = topicsData.map((t: any) => ({ ...t, subscribed: t.is_subscribed }));
-          setTopics(mappedTopics || []);
-          setSites(sitesData || []);
-          if (notificationsData && notificationsData.length > 0) {
-            lastNotificationIdRef.current = notificationsData[0].id;
-          }
-          console.log('✅ Initial data fetched successfully');
-          dataFetched.current = true;
-        } catch (error: any) {
-          console.error('❌ Error fetching initial data:', error);
-          setProfileError('Failed to load dashboard data. Please try again later.');
-        } finally {
-          setDataLoading(false);
-          setProfileLoading(false);
-          setLoadingSites(false);
-        }
-      };
-
-      fetchInitialData();
-    }
-  }, [profile]);
-
-  useEffect(() => {
-    if (!profile) return;
-    const waitForData = setInterval(() => {
-      if (!dataFetched.current) return;
-      clearInterval(waitForData);
-      let sitesTick = 0;
-      const poll = async () => {
-        if (document.visibilityState === 'hidden') return;
-        try {
-          const freshNotifications = await getNotifications();
-          if (freshNotifications && freshNotifications.length > 0) {
-            const latestId = freshNotifications[0].id;
-            if (lastNotificationIdRef.current && latestId !== lastNotificationIdRef.current) {
-              setNotifications(prev => {
-                const existingIds = new Set(prev.map((n: Notification) => n.id));
-                const brandNew = freshNotifications.filter(n => !existingIds.has(n.id));
-                brandNew.forEach(n => handleNewNotification(n as Notification));
-                return freshNotifications as Notification[];
-              });
-            }
-            lastNotificationIdRef.current = latestId;
-          }
-          sitesTick++;
-          if (sitesTick % 2 === 0) {
-            const freshSites = await getSites();
-            if (freshSites) setSites(freshSites);
-          }
-        } catch (err) {
-          console.warn('⚠️ Polling error:', err);
-        }
-      };
-      pollingIntervalRef.current = setInterval(poll, 30_000);
-      console.log('🔄 Real-time polling started (30s notifications / 60s sites)');
-      const onVisible = () => { if (document.visibilityState === 'visible') poll(); };
-      document.addEventListener('visibilitychange', onVisible);
-      return () => {
-        if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
-        document.removeEventListener('visibilitychange', onVisible);
-        console.log('⏹️ Polling stopped');
-      };
-    }, 500);
-    return () => clearInterval(waitForData);
-  }, [profile, handleNewNotification]);
-
-  useEffect(() => {
-    if (!profile) return;
-    oneSignalService.login(profile.id).catch((err) =>
-      console.error('❌ OneSignal login failed:', err)
-    );
-    oneSignalService.setupForegroundNotifications(handleNewNotification);
-    console.log('🔔 OneSignal foreground notification handler registered for user:', profile.id);
-  }, [profile, oneSignalService, handleNewNotification]);
-
-  useEffect(() => {
-    const checkSubscription = async () => {
-      try {
-        const isSubscribed = await oneSignalService.isSubscribed();
-        setIsPushEnabled(isSubscribed);
-      } catch (error) {
-        console.error("Failed to get initial subscription state", error);
-      }
-    };
-    checkSubscription();
-
-    oneSignalService.onSubscriptionChange((isSubscribed) => {
-      setIsPushEnabled(isSubscribed);
-    });
-  }, [oneSignalService]);
+    const pushService = PushNotificationService.getInstance();
+    setIsPushLoading(true);
+    pushService.getSubscription()
+      .then(subscription => {
+        setIsPushEnabled(!!subscription);
+        setIsPushLoading(false);
+      })
+      .catch(error => {
+        console.error('Failed to check for push subscription:', error);
+        setIsPushEnabled(false);
+        setIsPushLoading(false);
+      });
+  }, []);
 
   useEffect(() => {
     if (theme === 'dark') {
@@ -305,36 +272,18 @@ function App() {
 
   const handleLogout = useCallback(async () => {
     console.log('➡️ Starting logout process...');
-    try {
-      await oneSignalService.logout();
-      console.log('🔔 Logged out from OneSignal');
-      const cognitoUser = userPool.getCurrentUser();
-      if (cognitoUser) {
-        cognitoUser.signOut();
-      }
-    } catch (error: any) {
-       console.error('❌ Error during logout process:', error);
-       const cognitoUser = userPool.getCurrentUser();
-       if (cognitoUser) {
-         cognitoUser.signOut();
-       }
-    } finally {
-      if (pollingIntervalRef.current) {
-        clearInterval(pollingIntervalRef.current);
-        pollingIntervalRef.current = null;
-      }
-      lastNotificationIdRef.current = null;
-      setProfile(null);
-      dataFetched.current = false;
-      setNotifications([]);
-      setTopics([]);
-      setSites([]);
-      setToasts([]);
-      setIsPushEnabled(false);
-      navigate('/');
-      console.log('➡️ Client-side logout complete');
-    }
-  }, [navigate, oneSignalService]);
+    signOut();
+
+    setProfile(null);
+    dataFetched.current = false;
+    setNotifications([]);
+    setTopics([]);
+    setSites([]);
+    setToasts([]);
+    setIsPushEnabled(false);
+    navigate('/');
+    console.log('➡️ Client-side logout complete');
+  }, [navigate]);
 
   const handleNavigate = useCallback((page: string) => {
     if (profile) {
@@ -352,12 +301,12 @@ function App() {
         id: `local-${Date.now()}`,
         title: 'Test Alert Triggered',
         message: 'The test alert was successfully sent. You should receive a push notification and an in-app notification shortly.',
-        severity: 'low',                          // ✅ Valid: 'low' | 'medium' | 'high'
-        type: 'manual',                           // ✅ Required field
-        timestamp: new Date().toISOString(),      // ✅ Required field
-        site: null,                               // ✅ Required field (nullable)
-        comments: [],                             // ✅ Required field (array)
-        topic_id: null,                           // ✅ Required field (nullable)
+        severity: 'low',
+        type: 'manual',
+        timestamp: new Date().toISOString(),
+        site: null,
+        comments: [],
+        topic_id: null,
         status: 'new',
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
@@ -414,19 +363,12 @@ function App() {
     setTopics(prev => prev.map(t => t.id === topic.id ? { ...t, subscribed: isSubscribing } : t));
     try {
       await toggleTopicSubscription(topic.id);
-      if (isPushEnabled) {
-        if (!isSubscribing) {
-          oneSignalService.removeUserTags([`topic_${topic.id}`]);
-        } else {
-          oneSignalService.setUserTags({ [`topic_${topic.id}`]: '1' });
-        }
-      }
     } catch (error: any) {
       console.error('Error toggling subscription:', error);
       alert('Failed to update subscription. Please try again.');
       setTopics(prev => prev.map(t => t.id === topic.id ? { ...t, subscribed: !isSubscribing } : t));
     }
-  }, [isPushEnabled, oneSignalService]);
+  }, []);
 
   const handleDeleteTopic = useCallback(async (topic: Topic) => {
     const originalTopics = topics;
@@ -443,38 +385,6 @@ function App() {
   const handleClearLogs = useCallback(async () => {
     alert('Clearing logs is not implemented in this version.');
   }, []);
-
-  const subscribeToPush = useCallback(async () => {
-    setIsPushLoading(true);
-    try {
-      const playerId = await oneSignalService.subscribe();
-      if (playerId) {
-        console.log('✅ Push subscription successful, player ID:', playerId);
-        setIsPushEnabled(true);
-      } else {
-        alert('Could not subscribe to push notifications. Please check your browser settings and grant permission.');
-      }
-    } catch (error: any) {
-      console.error('❌ Failed to subscribe to push notifications:', error);
-      alert(`Error: ${error.message}`);
-    } finally {
-      setIsPushLoading(false);
-    }
-  }, [oneSignalService]);
-
-  const unsubscribeFromPush = useCallback(async () => {
-    setIsPushLoading(true);
-    try {
-      await oneSignalService.unsubscribe();
-      console.log('✅ Push unsubscription successful.');
-      setIsPushEnabled(false);
-    } catch (error: any) {
-      console.error('❌ Failed to unsubscribe from push notifications:', error);
-      alert('An error occurred while trying to unsubscribe from push notifications.');
-    } finally {
-      setIsPushLoading(false);
-    }
-  }, [oneSignalService]);
 
   const themeContextValue = useMemo(() => ({ theme, toggleTheme }), [theme, toggleTheme]);
 
@@ -592,9 +502,9 @@ function App() {
             snoozedUntil={snoozedUntil}
             setSnoozedUntil={setSnoozedUntil}
             isPushEnabled={isPushEnabled}
+            setIsPushEnabled={setIsPushEnabled}
             isPushLoading={isPushLoading}
-            onSubscribeToPush={subscribeToPush}
-            onUnsubscribeFromPush={unsubscribeFromPush}
+            setIsPushLoading={setIsPushLoading}
           />
         </ErrorBoundary>
       </div>

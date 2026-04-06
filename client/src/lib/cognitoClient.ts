@@ -7,13 +7,13 @@ import {
 import { cognitoConfig } from '../config';
 
 const poolData = {
-  UserPoolId: cognitoConfig.UserPoolId,
-  ClientId: cognitoConfig.ClientId,
+  UserPoolId: cognitoConfig.userPoolId,
+  ClientId: cognitoConfig.userPoolClientId,
 };
 
 if (!poolData.UserPoolId || !poolData.ClientId) {
   console.warn(
-    "Cognito User Pool ID and Client ID are not configured. Authentication will not work."
+    'Cognito User Pool ID and Client ID are not configured. Authentication will not work.'
   );
 }
 
@@ -27,21 +27,26 @@ export const getCurrentUser = (): Promise<CognitoUserSession | null> => {
       return resolve(null);
     }
 
-    cognitoUser.getSession((err: Error | null, session: CognitoUserSession | null) => {
-      if (err) {
-        console.error("Error getting session:", err);
-        return resolve(null);
+    cognitoUser.getSession(
+      (err: Error | null, session: CognitoUserSession | null) => {
+        if (err) {
+          console.error('Error getting session:', err);
+          return resolve(null);
+        }
+        if (session && session.isValid()) {
+          resolve(session);
+        } else {
+          resolve(null);
+        }
       }
-      if (session && session.isValid()) {
-        resolve(session);
-      } else {
-        resolve(null);
-      }
-    });
+    );
   });
 };
 
-export const confirmSignUp = (username: string, code: string): Promise<string> => {
+export const confirmSignUp = (
+  username: string,
+  code: string
+): Promise<string> => {
   return new Promise((resolve, reject) => {
     const cognitoUser = new CognitoUser({
       Username: username,
@@ -73,5 +78,11 @@ export const resendConfirmationCode = (username: string): Promise<void> => {
   });
 };
 
+export const signOut = () => {
+  const cognitoUser = userPool.getCurrentUser();
+  if (cognitoUser) {
+    cognitoUser.signOut();
+  }
+};
 
 export { userPool, CognitoUser, AuthenticationDetails, CognitoUserSession };

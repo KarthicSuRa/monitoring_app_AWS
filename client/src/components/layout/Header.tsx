@@ -14,6 +14,7 @@ interface HeaderProps {
   onNavigate: (page: string) => void;
   title?: string;
   profile: User | null;
+  onSearch?: (query: string) => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({ 
@@ -25,6 +26,7 @@ export const Header: React.FC<HeaderProps> = ({
   title,
   onNavigate,
   profile,
+  onSearch
 }) => {
     const themeContext = React.useContext(ThemeContext);
     const [isProfileOpen, setProfileOpen] = React.useState(false);
@@ -72,7 +74,7 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
             <div className="hidden items-center gap-3 md:flex">
                <Icon name="mcmLogo" className="h-9 w-9 text-primary" />
-              <h1 className="text-2xl font-bold text-foreground">{title || 'MCM Alerts'}</h1>
+              <h1 className="text-2xl font-bold text-foreground truncate">{title || 'MCM Alerts'}</h1>
             </div>
           </div>
 
@@ -85,6 +87,7 @@ export const Header: React.FC<HeaderProps> = ({
                 type="text"
                 placeholder="Search alerts..."
                 className="w-full pl-10 pr-4 py-2 text-sm sm:text-base rounded-md border border-border bg-transparent shadow-sm focus:border-ring focus:ring-ring"
+                onChange={(e) => onSearch && onSearch(e.target.value)}
               />
             </div>
 

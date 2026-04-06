@@ -1,8 +1,8 @@
 -- =============================================================
---  FINAL & COMPLETE SCHEMA FOR AWS MIGRATION (v8)
---  Added tables for alerting rules, maintenance windows, 
---  SSL certificate monitoring, and heartbeat checks.
---  Added location to ping_logs.
+--  FINAL & COMPLETE SCHEMA FOR AWS MIGRATION (v9)
+--  Replaced OneSignal with native AWS SNS.
+--  Added push_subscriptions table.
+--  Removed onesignal_player_id from user_notification_preferences.
 -- =============================================================
 
 -- Ensure required extensions are enabled
@@ -264,9 +264,17 @@ CREATE TABLE IF NOT EXISTS public.user_notification_preferences (
     user_id UUID UNIQUE NOT NULL,
     email_notifications BOOLEAN DEFAULT true,
     push_notifications BOOLEAN DEFAULT true,
-    onesignal_player_id TEXT, -- For sending push notifications
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS public.push_subscriptions (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+    token TEXT NOT NULL UNIQUE,
+    endpoint_arn TEXT NOT NULL,
+    subscription_arn TEXT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- =============================================================
@@ -305,6 +313,16 @@ CREATE TABLE IF NOT EXISTS public.emails (
 );
 
 -- =============================================================
+--  WEBSOCKET CONNECTIONS
+-- =============================================================
+
+CREATE TABLE IF NOT EXISTS public.websocket_connections (
+    connection_id TEXT PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- =============================================================
 --  INDEXES
 -- =============================================================
 
@@ -325,12 +343,15 @@ CREATE INDEX IF NOT EXISTS idx_teams_created_by ON public.teams(created_by);
 CREATE INDEX IF NOT EXISTS idx_team_members_user_id ON public.team_members(user_id);
 CREATE INDEX IF NOT EXISTS idx_team_members_team_id ON public.team_members(team_id);
 CREATE INDEX IF NOT EXISTS idx_topics_team_id ON public.topics(team_id);
+CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user_id ON public.push_subscriptions(user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_push_subscriptions_token_unique ON public.push_subscriptions(token);
 
 -- New Indexes
 CREATE INDEX IF NOT EXISTS idx_alert_rules_site_id ON public.alert_rules(site_id);
 CREATE INDEX IF NOT EXISTS idx_maintenance_windows_site_id ON public.maintenance_windows(site_id);
 CREATE INDEX IF NOT EXISTS idx_ssl_certificates_site_id ON public.ssl_certificates(site_id);
 CREATE INDEX IF NOT EXISTS idx_heartbeat_checks_name ON public.heartbeat_checks(name);
+CREATE INDEX IF NOT EXISTS idx_websocket_connections_user_id ON public.websocket_connections(user_id);
 
 
 -- =============================================================
@@ -346,7 +367,7 @@ CREATE TRIGGER trg_sfcc_orders_updated_at BEFORE UPDATE ON public.sfcc_orders FO
 DROP TRIGGER IF EXISTS trg_som_orders_updated_at ON public.som_orders;
 CREATE TRIGGER trg_som_orders_updated_at BEFORE UPDATE ON public.som_orders FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
 
-DROP TRIGGER IF EXISTS handle_webhook__sources_updated_at ON public.webhook_sources;
+DROP TRIGGER IF EXISTS handle_webhook_sources_updated_at ON public.webhook_sources;
 CREATE TRIGGER handle_webhook_sources_updated_at BEFORE UPDATE ON public.webhook_sources FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
 
 DROP TRIGGER IF EXISTS handle_topics_updated_at ON public.topics;

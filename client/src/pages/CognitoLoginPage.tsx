@@ -10,8 +10,11 @@ interface CognitoLoginPageProps {
 export const CognitoLoginPage: React.FC<CognitoLoginPageProps> = ({ onLoginSuccess }) => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isNewPasswordRequired, setIsNewPasswordRequired] = useState(false);
+  const [cognitoUser, setCognitoUser] = useState<CognitoUser | null>(null);
   const navigate = useNavigate();
 
   const handleLogin = (e: React.FormEvent) => {
@@ -29,9 +32,10 @@ export const CognitoLoginPage: React.FC<CognitoLoginPageProps> = ({ onLoginSucce
       Username: username,
       Pool: userPool,
     };
-    const cognitoUser = new CognitoUser(userData);
+    const user = new CognitoUser(userData);
+    setCognitoUser(user);
 
-    cognitoUser.authenticateUser(authenticationDetails, {
+    user.authenticateUser(authenticationDetails, {
       onSuccess: (result) => {
         console.log('Authentication successful', result);
         setIsLoading(false);
@@ -43,7 +47,34 @@ export const CognitoLoginPage: React.FC<CognitoLoginPageProps> = ({ onLoginSucce
         setError(err.message || 'An unknown error occurred');
         setIsLoading(false);
       },
+      newPasswordRequired: (userAttributes, requiredAttributes) => {
+        console.log('New password required');
+        setIsLoading(false);
+        setIsNewPasswordRequired(true);
+      },
     });
+  };
+
+  const handleNewPasswordSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsLoading(true);
+    setError(null);
+
+    if (cognitoUser) {
+      cognitoUser.completeNewPasswordChallenge(newPassword, null, {
+        onSuccess: (result) => {
+          console.log('New password set successfully', result);
+          setIsLoading(false);
+          onLoginSuccess();
+          navigate('/');
+        },
+        onFailure: (err) => {
+          console.error('Failed to set new password', err);
+          setError(err.message || 'An unknown error occurred');
+          setIsLoading(false);
+        },
+      });
+    }
   };
 
   return (
@@ -61,59 +92,96 @@ export const CognitoLoginPage: React.FC<CognitoLoginPageProps> = ({ onLoginSucce
           </div>
         </div>
         <div className="bg-card/80 backdrop-blur-sm rounded-2xl shadow-xl p-6 sm:p-8 border">
-            <h2 className="text-2xl font-bold text-center text-foreground mb-6">Welcome Back</h2>
-          <form onSubmit={handleLogin}>
-            <div className="mb-4">
-              <label className="block text-muted-foreground text-sm font-bold mb-2" htmlFor="username">
-                Username
-              </label>
-              <input
-                id="username"
-                type="text"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                className="bg-background/50 border rounded w-full py-3 px-4 text-foreground leading-tight focus:outline-none focus:ring-2 focus:ring-primary"
-                required
-              />
-            </div>
-            <div className="mb-4">
-                <div className="flex justify-between items-center mb-2">
+          {isNewPasswordRequired ? (
+            <>
+              <h2 className="text-2xl font-bold text-center text-foreground mb-6">Set New Password</h2>
+              <form onSubmit={handleNewPasswordSubmit}>
+                <div className="mb-4">
+                  <label className="block text-muted-foreground text-sm font-bold mb-2" htmlFor="newPassword">
+                    New Password
+                  </label>
+                  <input
+                    id="newPassword"
+                    type="password"
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    className="bg-background/50 border rounded w-full py-3 px-4 text-foreground leading-tight focus:outline-none focus:ring-2 focus:ring-primary"
+                    required
+                  />
+                </div>
+                {error && (
+                  <div className="bg-destructive/10 text-destructive-foreground text-sm font-semibold p-3 rounded-md mb-4 text-center">
+                    {error}
+                  </div>
+                )}
+                <div className="mt-6">
+                  <button
+                    type="submit"
+                    className="w-full bg-primary hover:bg-primary/90 text-primary-foreground font-bold py-3 px-4 rounded-lg focus:outline-none focus:shadow-outline transition-colors disabled:opacity-50"
+                    disabled={isLoading}
+                  >
+                    {isLoading ? 'Setting Password...' : 'Set New Password'}
+                  </button>
+                </div>
+              </form>
+            </>
+          ) : (
+            <>
+              <h2 className="text-2xl font-bold text-center text-foreground mb-6">Welcome Back</h2>
+              <form onSubmit={handleLogin}>
+                <div className="mb-4">
+                  <label className="block text-muted-foreground text-sm font-bold mb-2" htmlFor="username">
+                    Username
+                  </label>
+                  <input
+                    id="username"
+                    type="text"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    className="bg-background/50 border rounded w-full py-3 px-4 text-foreground leading-tight focus:outline-none focus:ring-2 focus:ring-primary"
+                    required
+                  />
+                </div>
+                <div className="mb-4">
+                  <div className="flex justify-between items-center mb-2">
                     <label className="block text-muted-foreground text-sm font-bold" htmlFor="password">
-                        Password
+                      Password
                     </label>
                     <Link to="/forgot-password" className="text-sm text-primary hover:underline font-medium">
-                        Forgot Password?
+                      Forgot Password?
                     </Link>
+                  </div>
+                  <input
+                    id="password"
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="bg-background/50 border rounded w-full py-3 px-4 text-foreground leading-tight focus:outline-none focus:ring-2 focus:ring-primary"
+                    required
+                  />
                 </div>
-              <input
-                id="password"
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="bg-background/50 border rounded w-full py-3 px-4 text-foreground leading-tight focus:outline-none focus:ring-2 focus:ring-primary"
-                required
-              />
-            </div>
-            {error && 
-                <div className="bg-destructive/10 text-destructive-foreground text-sm font-semibold p-3 rounded-md mb-4 text-center">
+                {error && (
+                  <div className="bg-destructive/10 text-destructive-foreground text-sm font-semibold p-3 rounded-md mb-4 text-center">
                     {error}
+                  </div>
+                )}
+                <div className="mt-6">
+                  <button
+                    type="submit"
+                    className="w-full bg-primary hover:bg-primary/90 text-primary-foreground font-bold py-3 px-4 rounded-lg focus:outline-none focus:shadow-outline transition-colors disabled:opacity-50"
+                    disabled={isLoading}
+                  >
+                    {isLoading ? 'Signing In...' : 'Sign In'}
+                  </button>
                 </div>
-            }
-            <div className="mt-6">
-              <button
-                type="submit"
-                className="w-full bg-primary hover:bg-primary/90 text-primary-foreground font-bold py-3 px-4 rounded-lg focus:outline-none focus:shadow-outline transition-colors disabled:opacity-50"
-                disabled={isLoading}
-              >
-                {isLoading ? 'Signing In...' : 'Sign In'}
-              </button>
-            </div>
-             <div className="text-center mt-6">
-                <Link to="/signup" className="text-sm text-muted-foreground hover:text-primary">
+                <div className="text-center mt-6">
+                  <Link to="/signup" className="text-sm text-muted-foreground hover:text-primary">
                     Don't have an account? <span className="font-bold">Sign up</span>
-                </Link>
-             </div>
-          </form>
+                  </Link>
+                </div>
+              </form>
+            </>
+          )}
         </div>
         <div className="text-center mt-6">
           <Link to="/" className="text-sm text-muted-foreground hover:text-primary">

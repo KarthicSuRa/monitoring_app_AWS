@@ -1,6 +1,7 @@
 const { Pool } = require("pg");
-const { CognitoJwtVerifier } = require("aws-jwt-verify");
-const https = require('https');
+const { SNSClient, PublishCommand } = require("@aws-sdk/client-sns");
+
+const snsClient = new SNSClient({});
 
 // Centralized CORS configuration
 const getCorsHeaders = (event) => {
@@ -27,7 +28,7 @@ const jsonResponse = (statusCode, body, headers = {}, corsHeaders = {}) => ({
 
 
 // =============================================================
-//  DATABASE & AUTH
+//  DATABASE
 // =============================================================
 
 let pool;
@@ -45,105 +46,60 @@ const initializePool = () => {
   }
 };
 
-const verifier = CognitoJwtVerifier.create({
-  userPoolId: process.env.COGNITO_USER_POOL_ID,
-  tokenUse: "id",
-  clientId: process.env.COGNITO_CLIENT_ID,
-});
-
-const authenticate = async (event) => {
-  const authHeader = event.headers?.authorization || event.headers?.Authorization;
-  if (!authHeader) {
-    return { authenticated: false, error: 'Missing Authorization header' };
-  }
-  const token = authHeader.split(' ')[1];
-  if (!token) {
-    return { authenticated: false, error: 'Invalid token format' };
-  }
-  try {
-    const payload = await verifier.verify(token);
-    return { authenticated: true, user: { id: payload.sub, email: payload.email, app_role: payload['custom:app_role'] || 'member' } };
-  } catch (error) {
-    return { authenticated: false, error: 'Invalid token' };
-  }
-};
-
 // =============================================================
-//  OneSignal Push Notification Sender
+//  SNS Push Notification Sender (FCM v1)
 // =============================================================
-const sendOneSignalPush = async (client, notification) => {
-    const oneSignalAppId = process.env.ONESIGNAL_APP_ID;
-    const oneSignalApiKey = "os_v2_app_5xlztdfarndo3pchwcxabxmqkddjab4s4dwuuif7xwn5dx5olas26fhhrwajus6x2jugw6jvndoaxbyhvbca73aahy4amrsiqrbbula";
-
-    if (!oneSignalAppId || !oneSignalApiKey) {
-        console.warn('OneSignal environment variables not set. Skipping push notification.');
+const sendSnsPush = async (notification) => {
+    const topicArn = process.env.SNS_TOPIC_ARN;
+    if (!topicArn) {
+        console.warn('SNS_TOPIC_ARN environment variable not set. Skipping push notification.');
         return null;
     }
 
-    let oneSignalTarget = {
-        included_segments: ["All"] // Default to broad audience
+    const fcmV1Message = {
+        message: {
+            notification: {
+                title: notification.title,
+                body: notification.message,
+            },
+            webpush: {
+                fcm_options: {
+                    link: process.env.CLOUDFRONT_URL || 'http://localhost:3000',
+                },
+                notification: {
+                    icon: `${process.env.CLOUDFRONT_URL || 'http://localhost:3000'}/mcm-logo.png`,
+                },
+            },
+            data: {
+                notificationId: notification.id,
+                severity: notification.severity,
+                type: notification.type,
+                topic_id: notification.topic_id,
+                status: notification.status,
+                created_at: notification.created_at,
+            },
+        },
     };
 
-    // If it's a topic-specific notification, find subscribed users
-    if (notification.topic_id) {
-        try {
-            const { rows: subscribers } = await client.query(
-                'SELECT user_id FROM public.topic_subscribers WHERE topic_id = $1',
-                [notification.topic_id]
-            );
-            const subscriberIds = subscribers.map(s => s.user_id);
-            if (subscriberIds.length > 0) {
-                oneSignalTarget = { include_external_user_ids: subscriberIds };
-            } else {
-                console.log(`Topic ${notification.topic_id} has no subscribers. Skipping push.`);
-                return null; // No one to send it to
-            }
-        } catch (subErr) {
-            console.error(`Failed to get subscribers for topic ${notification.topic_id}:`, subErr.message);
-            return null; // Error, so don't send
-        }
+    const messagePayload = {
+        default: `New notification: ${notification.title}`,
+        GCM: JSON.stringify({ fcmV1Message })
+    };
+
+    const command = new PublishCommand({
+        TopicArn: topicArn,
+        Message: JSON.stringify(messagePayload),
+        MessageStructure: 'json'
+    });
+
+    try {
+        const result = await snsClient.send(command);
+        console.log("Successfully sent FCM v1 push notification via SNS:", result.MessageId);
+        return result;
+    } catch (err) {
+        console.error("Failed to send SNS push notification:", err.message, err.stack);
+        return { error: err.message };
     }
-
-    const pushPayload = JSON.stringify({
-        app_id: oneSignalAppId,
-        ...oneSignalTarget,
-        headings: { en: notification.title },
-        contents: { en: notification.message },
-        data: {
-            notificationId: notification.id,
-            severity: notification.severity,
-            type: notification.type,
-            topic_id: notification.topic_id,
-            status: notification.status,
-        },
-    });
-
-    const pushOptions = {
-        hostname: 'onesignal.com',
-        path: '/api/v1/notifications',
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Key ${oneSignalApiKey}`,
-            'Content-Length': Buffer.byteLength(pushPayload),
-        },
-    };
-
-    return new Promise((resolve) => {
-        const req = https.request(pushOptions, (res) => {
-            let data = '';
-            res.on('data', chunk => data += chunk);
-            res.on('end', () => {
-                try { resolve(JSON.parse(data)); } catch { resolve(data); }
-            });
-        });
-        req.on('error', (e) => {
-            console.error('OneSignal push request failed:', e.message);
-            resolve({ error: e.message });
-        });
-        req.write(pushPayload);
-        req.end();
-    });
 };
 
 
@@ -158,7 +114,7 @@ const handleNotifications = async (client, method, path, body, user, corsHeaders
     const isComments = pathParts[2] === 'comments';
     const isGenericPost = method === 'POST' && pathParts.length === 1 && pathParts[0] === 'notifications';
 
-    // POST /notifications (generic, public)
+    // POST /notifications (generic, webhook-driven)
     if (isGenericPost) {
         const { topic_id, topic_name, title, message, severity, type, metadata } = body;
         if (!title || !message || !severity) {
@@ -167,6 +123,7 @@ const handleNotifications = async (client, method, path, body, user, corsHeaders
 
         let finalTopicId = topic_id || null;
 
+        // If topic name is provided, try to find its ID
         if (topic_name && !finalTopicId) {
             try {
                 const topicRes = await client.query(
@@ -190,15 +147,17 @@ const handleNotifications = async (client, method, path, body, user, corsHeaders
         );
         
         const insertedNotification = rows[0];
-        const pushResult = await sendOneSignalPush(client, insertedNotification);
+        // Send a push notification for the newly created alert
+        const pushResult = await sendSnsPush(insertedNotification);
 
         return jsonResponse(201, { ...insertedNotification, push_notification: pushResult }, {}, corsHeaders);
     }
     
-    // POST /notifications/test
+    // POST /notifications/test (for admins/devs to test push notifications)
     if (method === 'POST' && isTest) {
         let topicId = null;
         try {
+            // Find a common topic to associate the test alert with, if it exists.
             const topicRes = await client.query(
                 "SELECT id FROM public.topics WHERE name = 'Site Monitoring' LIMIT 1"
             );
@@ -221,17 +180,19 @@ const handleNotifications = async (client, method, path, body, user, corsHeaders
             ]
         );
         const insertedNotification = rows[0];
-        const pushResult = await sendOneSignalPush(client, insertedNotification);
+        const pushResult = await sendSnsPush(insertedNotification);
 
         return jsonResponse(201, { ...insertedNotification, push_notification: pushResult }, {}, corsHeaders);
+    }
+
+    // All endpoints below this point require authentication
+    if (!user) {
+        return jsonResponse(401, { error: 'Unauthorized' }, {}, corsHeaders);
     }
 
     if (notificationId && !isTest) {
         // POST /notifications/:id/comments
         if (isComments && method === 'POST') {
-            if (!user || !user.id) {
-              return jsonResponse(401, { error: 'Authentication is required to post a comment.'}, {}, corsHeaders);
-            }
             const { text } = body;
             if (!text || typeof text !== 'string' || text.trim().length === 0) {
                 return jsonResponse(400, { error: 'Comment text is required and must be a non-empty string.' }, {}, corsHeaders);
@@ -309,14 +270,13 @@ const handleNotifications = async (client, method, path, body, user, corsHeaders
 
             let userMap = {};
             if (uniqueUserIds.length > 0) {
-                const placeholders = uniqueUserIds.map((_, i) => `$${i + 1}`).join(', ');
-                const { rows: users } = await client.query(
-                    `SELECT id::text, full_name FROM public.users WHERE id = ANY(ARRAY[${placeholders}]::uuid[])`,
-                    uniqueUserIds
-                );
+                // Use parameterized query for security and efficiency
+                const userQuery = `SELECT id::text, full_name FROM public.users WHERE id = ANY($1::uuid[])`;
+                const { rows: users } = await client.query(userQuery, [uniqueUserIds]);
                 userMap = Object.fromEntries(users.map(u => [u.id, u.full_name]));
             }
 
+            // Enrich comments with user names
             const enriched = notifications.map(n => ({
                 ...n,
                 comments: (n.comments || []).map(c => ({
@@ -327,8 +287,8 @@ const handleNotifications = async (client, method, path, body, user, corsHeaders
 
             return jsonResponse(200, enriched, {}, corsHeaders);
         } catch (notifErr) {
-            console.error('NOTIFICATIONS_QUERY_ERROR:', notifErr.message, notifErr.code, notifErr.detail);
-            throw notifErr;
+            console.error('NOTIFICATIONS_QUERY_ERROR:', notifErr.message, notifErr.stack);
+            return jsonResponse(500, { error: 'Failed to retrieve notifications', details: notifErr.message }, {}, corsHeaders);
         }
     }
 
@@ -343,44 +303,58 @@ const handleNotifications = async (client, method, path, body, user, corsHeaders
 exports.handler = async (event) => {
   const corsHeaders = getCorsHeaders(event);
 
+  // Handle CORS preflight requests
   if (event.httpMethod === 'OPTIONS') {
     return { statusCode: 204, headers: corsHeaders, body: '' };
   }
-
-  const requestOrigin = (event.headers || {}).origin || (event.headers || {}).Origin || '';
-  if (requestOrigin && !corsHeaders['Access-Control-Allow-Origin']) {
-      return jsonResponse(403, { error: 'CORS error: Origin not allowed' }, {}, corsHeaders);
-  }
-
-  const path = event.path;
+  
+  // Some POST endpoints are public (e.g., from webhooks) and don't need auth.
+  const path = event.path.replace(/^\/prod/, ''); // Strip stage if present
   const method = event.httpMethod;
-  const isPublicPost = method === 'POST' && (path.endsWith('/notifications') || path.endsWith('/notifications/test'));
-
+  const isPublicPost = method === 'POST' && (path === '/notifications' || path === '/notifications/test');
+  
   let user = null;
+  // If the endpoint is not public, it requires authentication.
   if (!isPublicPost) {
-    const authResult = await authenticate(event);
-    if (!authResult.authenticated) {
-      return jsonResponse(401, { error: authResult.error }, {}, corsHeaders);
-    }
-    user = authResult.user;
+      const claims = event.requestContext.authorizer?.claims;
+      // If there are no claims, the request is unauthorized.
+      if (!claims) {
+          return jsonResponse(401, { error: 'Unauthorized: No valid token provided.' }, {}, corsHeaders);
+      }
+      // Reconstruct the user object from the token claims
+      user = {
+          id: claims.sub,
+          email: claims.email,
+          app_role: claims['custom:app_role'] || 'member' // Default to 'member' if not specified
+      };
   }
 
   let client;
-
   try {
     initializePool();
     client = await pool.connect();
+    
+    // On authenticated requests, ensure the user exists in the local DB.
+    if (user && user.id) {
+        await client.query(
+            `INSERT INTO public.users (id, email, app_role) VALUES ($1, $2, $3)
+             ON CONFLICT (id) DO NOTHING`,
+            [user.id, user.email, user.app_role]
+        );
+    }
+
     const body = event.body ? JSON.parse(event.body) : {};
 
     return await handleNotifications(client, method, path, body, user, corsHeaders);
 
   } catch (err) {
-    console.error('[DIAG_FATAL] Unhandled error in Notification Lambda:', err.message, err.stack);
+    // Catch-all for unexpected errors
+    console.error('[FATAL] Unhandled error in Notification Lambda:', err.message, err.stack);
     return jsonResponse(500, {
       error: 'Internal Server Error',
       details: err.message,
     }, {}, corsHeaders);
   } finally {
-    if (client) client.release();
+    if (client) client.release(); // Ensure the database client is always released.
   }
 };

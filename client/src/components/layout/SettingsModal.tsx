@@ -1,6 +1,7 @@
 import React from 'react';
 import { Icon } from '../ui/Icon';
 import { Switch } from '../ui/Switch';
+import { PushNotificationService } from '../../lib/pushNotificationService';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -10,9 +11,9 @@ interface SettingsModalProps {
   snoozedUntil: Date | null;
   setSnoozedUntil: (date: Date | null) => void;
   isPushEnabled: boolean;
+  setIsPushEnabled: (enabled: boolean) => void;
   isPushLoading: boolean;
-  onSubscribeToPush: () => void;
-  onUnsubscribeFromPush: () => void;
+  setIsPushLoading: (loading: boolean) => void;
 }
 
 // A simple, silent audio file encoded in Base64
@@ -33,10 +34,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   snoozedUntil,
   setSnoozedUntil,
   isPushEnabled,
+  setIsPushEnabled,
   isPushLoading,
-  onSubscribeToPush,
-  onUnsubscribeFromPush,
+  setIsPushLoading,
 }) => {
+  const pushService = PushNotificationService.getInstance();
+
   if (!isOpen) return null;
 
   const handleSnooze = (minutes: number) => {
@@ -58,13 +61,23 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setSoundEnabled(newCheckedState);
   };
 
-  const handlePushToggle = (newCheckedState: boolean) => {
+  const handlePushToggle = async (newCheckedState: boolean) => {
     if (isPushLoading) return;
-
-    if (newCheckedState) {
-      onSubscribeToPush();
-    } else {
-      onUnsubscribeFromPush();
+    setIsPushLoading(true);
+    try {
+      if (newCheckedState) {
+        await pushService.subscribe();
+        setIsPushEnabled(true);
+      } else {
+        await pushService.unsubscribe();
+        setIsPushEnabled(false);
+      }
+    } catch (error) {
+      console.error("Error toggling push notifications", error);
+      // Revert the switch state on error
+      setIsPushEnabled(!newCheckedState);
+    } finally {
+      setIsPushLoading(false);
     }
   };
 

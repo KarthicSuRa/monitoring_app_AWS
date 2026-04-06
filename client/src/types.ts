@@ -87,7 +87,7 @@ export interface SystemStatusData {
   last_updated: string;
   service: 'Ready' | 'Error';
   database: 'Connected' | 'Disconnected';
-  push: 'Supported' | 'Unsupported' | 'OneSignal';
+  push: 'Supported' | 'Unsupported' | 'SNS';
   subscription: 'Active' | 'Inactive';
 }
 
