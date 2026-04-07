@@ -211,13 +211,19 @@ export class InfrastructureStack extends cdk.Stack {
         stageName: 'prod',
         autoDeploy: true,
     });
+    
+    const webSocketMgmtUrl = cdk.Fn.sub('https://${apiId}.execute-api.${region}.amazonaws.com/${stage}', {
+      apiId: webSocketApi.apiId,
+      region: this.region,
+      stage: webSocketStage.stageName,
+    });
 
     const webSocketHandler = new lambda.Function(this, 'McmWebSocketLambda', {
         ...commonLambdaProps,
         handler: 'websocket-lambda.handler',
         environment: {
             ...commonLambdaProps.environment,
-            WEBSOCKET_API_ENDPOINT: webSocketStage.url,
+            WEBSOCKET_API_ENDPOINT: webSocketMgmtUrl,
         },
     });
     grantAllTables(webSocketHandler);
@@ -253,7 +259,7 @@ export class InfrastructureStack extends cdk.Stack {
       environment: {
         ...commonLambdaProps.environment,
         SNS_TOPIC_ARN: pushNotificationTopic.topicArn,
-        WEBSOCKET_API_ENDPOINT: webSocketStage.url, 
+        WEBSOCKET_API_ENDPOINT: webSocketMgmtUrl, 
       },
     });
     pushNotificationTopic.grantPublish(notificationLambda);

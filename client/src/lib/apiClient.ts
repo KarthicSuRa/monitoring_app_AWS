@@ -155,16 +155,31 @@ const connect = async () => {
 
         socket.onmessage = (event) => {
             try {
-                const data = JSON.parse(event.data);
-                if (data.type === 'pong') {
-                    return;
+                let data = JSON.parse(event.data);
+
+                // ADDED: Handle double-stringified JSON
+                if (typeof data === 'string') {
+                    data = JSON.parse(data);
                 }
-                if (data.type === 'NEW_NOTIFICATION' && onNotificationCallback) {
-                    console.log('Received new notification via WebSocket:', data.notification);
-                    onNotificationCallback(data.notification as Notification);
+                
+                if (data.type === 'pong') return;
+
+                let notification: Notification | null = null;
+
+                if (data.type === 'NEW_NOTIFICATION' && data.notification) {
+                    notification = data.notification as Notification;
+                } else if (data.id && data.title) {
+                    notification = data as Notification;
+                }
+
+                if (notification && onNotificationCallback) {
+                    console.log('Received new notification via WebSocket:', notification);
+                    onNotificationCallback(notification);
+                } else {
+                    console.log('Received unhandled WebSocket message:', data);
                 }
             } catch (error) {
-                console.error('Error processing WebSocket message:', error);
+                console.error('Error processing WebSocket message:', event.data, error);
             }
         };
 

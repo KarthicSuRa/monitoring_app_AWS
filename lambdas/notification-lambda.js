@@ -296,32 +296,10 @@ async function handleNotifications(method, path, body, user, cors) {
 
   // ── POST /notifications/test ──────────────────────────────────────────
   if (method === 'POST' && isTest) {
-    let topicId = null;
-    const topicName = 'Site Monitoring';
-    const topicItems = await queryItems(TABLES.TOPICS, {
-      IndexName: 'name-index',
-      KeyConditionExpression: '#n = :name',
-      ExpressionAttributeNames: { '#n': 'name' },
-      ExpressionAttributeValues: { ':name': topicName },
-      Limit: 1,
-    });
-    if (topicItems.length > 0) {
-      topicId = topicItems[0].id;
-    } else {
-      // "Site Monitoring" topic not found, create it
-      topicId = newId();
-      await putItem(TABLES.TOPICS, {
-        id: topicId,
-        name: topicName,
-        created_at: now(),
-        updated_at: now(),
-      });
-    }
-
     const ts = now();
     const item = {
       id: newId(),
-      topic_id: topicId,
+      topic_id: 'test-notifications',
       title: 'Test Alert: Everything is Awesome!',
       message: 'This is a test notification to confirm your alert setup is working. No action required.',
       severity: 'low',
@@ -331,13 +309,13 @@ async function handleNotifications(method, path, body, user, cors) {
       created_at: ts,
       updated_at: ts,
     };
+    
     await putItem(TABLES.NOTIFICATIONS, item);
-
-    // Fan out to push (optional) and a direct websocket message to the user
-    const pushResult = await sendSnsPush(item);
+    
     const wsResult = await sendWebSocketNotification(item, user.id);
+    const pushResult = await sendSnsPush(item);
 
-    return json(201, { ...item, push_notification: pushResult, websocket_notification: wsResult }, cors);
+    return json(201, { ...item, websocket_notification: wsResult, push_notification: pushResult }, cors);
   }
 
   // ── POST /notifications/:id/comments ─────────────────────────────────
