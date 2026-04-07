@@ -133,6 +133,12 @@ export interface Incident {
   is_resolved: boolean;
 }
 
+export interface SslInfo {
+  is_valid: boolean;
+  valid_to: string;
+  issuer_s_o: string;
+}
+
 export interface MonitoredSite {
   id: string;
   name: string;
@@ -153,6 +159,7 @@ export interface MonitoredSite {
   ping_logs?: PingLog[];
   last_checked?: string;          // legacy alias
   incidents?: Incident[];
+  ssl_info?: SslInfo | null;
 }
 
 

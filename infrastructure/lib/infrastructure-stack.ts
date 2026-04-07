@@ -28,16 +28,6 @@ export class InfrastructureStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
-    // ─── FCM Service Account Credentials ─────────────────────────────────
-    const serviceAccountCredentialsPath = path.join(__dirname, 'service-account-credentials.json');
-    if (!fs.existsSync(serviceAccountCredentialsPath)) {
-      throw new Error(
-        `Service account credentials file not found at ${serviceAccountCredentialsPath}. ` +
-        `Please create this file and add your GCP credentials. Add it to .gitignore!`
-      );
-    }
-    const serviceAccountCredentialsRaw = fs.readFileSync(serviceAccountCredentialsPath, 'utf-8');
-
     // ─── DynamoDB Tables ──────────────────────────────────────────────────
     const tables = createDynamoTables(this);
 
@@ -66,46 +56,8 @@ export class InfrastructureStack extends cdk.Stack {
       displayName: 'MCM Alerts Push Notification Topic',
     });
 
-    // ─── SNS FCM Platform Application ────────────────────────────────────
-    const credentialsHash = crypto
-      .createHash('sha256')
-      .update(serviceAccountCredentialsRaw)
-      .digest('hex')
-      .slice(0, 12);
-
-    const appName = `McmFcmApp-${credentialsHash}`;
-    const fcmPlatformApplication = new cr.AwsCustomResource(this, 'FcmPlatformApplicationV3', {
-      onCreate: {
-        service: 'SNS',
-        action: 'createPlatformApplication',
-        parameters: {
-          Name: appName,
-          Platform: 'GCM',
-          Attributes: { PlatformCredential: serviceAccountCredentialsRaw },
-        },
-        physicalResourceId: cr.PhysicalResourceId.of(appName),
-      },
-      onUpdate: {
-        service: 'SNS',
-        action: 'createPlatformApplication',
-        parameters: {
-          Name: appName,
-          Platform: 'GCM',
-          Attributes: { PlatformCredential: serviceAccountCredentialsRaw },
-        },
-        physicalResourceId: cr.PhysicalResourceId.of(appName),
-      },
-      onDelete: {
-        service: 'SNS',
-        action: 'deletePlatformApplication',
-        parameters: { PlatformApplicationArn: new cr.PhysicalResourceIdReference() },
-      },
-      policy: cr.AwsCustomResourcePolicy.fromSdkCalls({
-        resources: cr.AwsCustomResourcePolicy.ANY_RESOURCE,
-      }),
-    });
-
-    const fcmPlatformApplicationArn = fcmPlatformApplication.getResponseField('PlatformApplicationArn');
+    // ─── SNS FCM Platform Application (Manually Created) ──────────────────
+    const fcmPlatformApplicationArn = 'arn:aws:sns:ap-southeast-2:867958227307:app/GCM/testfcm';
 
     // ─── S3 + CloudFront ──────────────────────────────────────────────────
     const frontendBucket = new s3.Bucket(this, 'McmAlertsFrontendBucket', {
@@ -244,6 +196,56 @@ export class InfrastructureStack extends cdk.Stack {
       properties: { seedHash },
     });
 
+    // ─── WebSocket Auth Lambda ────────────────────────────────────────────
+    const webSocketAuthLambda = new lambda.Function(this, 'McmWebSocketAuthLambda', {
+        runtime: lambda.Runtime.NODEJS_20_X,
+        handler: 'websocket-auth-lambda.handler',
+        code: lambdaCode,
+        environment: { USER_POOL_ID: userPool.userPoolId },
+    });
+
+    // ─── WebSocket Handler Lambda ─────────────────────────────────────────
+    const webSocketApi = new apigw2.WebSocketApi(this, 'McmAlertsWebSocketApi');
+    const webSocketStage = new apigw2.WebSocketStage(this, 'McmAlertsWebSocketStage', {
+        webSocketApi,
+        stageName: 'prod',
+        autoDeploy: true,
+    });
+
+    const webSocketHandler = new lambda.Function(this, 'McmWebSocketLambda', {
+        ...commonLambdaProps,
+        handler: 'websocket-lambda.handler',
+        environment: {
+            ...commonLambdaProps.environment,
+            WEBSOCKET_API_ENDPOINT: webSocketStage.url,
+        },
+    });
+    grantAllTables(webSocketHandler);
+    webSocketHandler.addToRolePolicy(new iam.PolicyStatement({
+        actions: ['execute-api:ManageConnections'],
+        resources: [`arn:aws:execute-api:${this.region}:${this.account}:${webSocketApi.apiId}/*`],
+    }));
+
+    const webSocketAuthorizer = new WebSocketLambdaAuthorizer(
+        'McmWebSocketAuthorizerV2',
+        webSocketAuthLambda,
+        { identitySource: ['route.request.querystring.token'] }
+    );
+
+    webSocketApi.addRoute('$connect', {
+        integration: new WebSocketLambdaIntegration('ConnectIntegration', webSocketHandler),
+        authorizer: webSocketAuthorizer,
+    });
+    webSocketApi.addRoute('$disconnect', {
+        integration: new WebSocketLambdaIntegration('DisconnectIntegration', webSocketHandler),
+    });
+    webSocketApi.addRoute('$default', {
+        integration: new WebSocketLambdaIntegration('DefaultIntegration', webSocketHandler),
+    });
+    webSocketApi.addRoute('ping', {
+        integration: new WebSocketLambdaIntegration('PingIntegration', webSocketHandler),
+    });
+
     // ─── Notification Lambda ──────────────────────────────────────────────
     const notificationLambda = new lambda.Function(this, 'McmNotificationLambda', {
       ...commonLambdaProps,
@@ -251,10 +253,15 @@ export class InfrastructureStack extends cdk.Stack {
       environment: {
         ...commonLambdaProps.environment,
         SNS_TOPIC_ARN: pushNotificationTopic.topicArn,
+        WEBSOCKET_API_ENDPOINT: webSocketStage.url, 
       },
     });
     pushNotificationTopic.grantPublish(notificationLambda);
     grantAllTables(notificationLambda);
+    notificationLambda.addToRolePolicy(new iam.PolicyStatement({
+        actions: ['execute-api:ManageConnections'],
+        resources: [`arn:aws:execute-api:${this.region}:${this.account}:${webSocketApi.apiId}/*`],
+    }));
 
     // ─── Checker Lambda ───────────────────────────────────────────────────
     const checkerLambda = new lambda.Function(this, 'McmCheckerLambda', {
@@ -332,7 +339,34 @@ export class InfrastructureStack extends cdk.Stack {
     apiLambda.addToRolePolicy(new iam.PolicyStatement({
       actions: [
         'sns:CreatePlatformEndpoint',
-        'sns:DeletePlatformEndpoint',
+        'sns:DeleteEndpoint',
+        'sns:GetEndpointAttributes',
+        'sns:SetEndpointAttributes',
+        'sns:Subscribe',
+        'sns:Unsubscribe',
+      ],
+      resources: [
+        fcmPlatformApplicationArn,
+        `${fcmPlatformApplicationArn}/endpoint/*`,
+        pushNotificationTopic.topicArn,
+      ],
+    }));
+
+    // ─── API Lambda 2 ─────────────────────────────────────────────────────
+    const apiLambda2 = new lambda.Function(this, 'McmApiLambda2', {
+      ...commonLambdaProps,
+      handler: 'api-lambda.handler',
+      environment: {
+        ...commonLambdaProps.environment,
+        SNS_TOPIC_ARN: pushNotificationTopic.topicArn,
+        SNS_PLATFORM_APPLICATION_ARN: fcmPlatformApplicationArn,
+      },
+    });
+    grantAllTables(apiLambda2);
+    apiLambda2.addToRolePolicy(new iam.PolicyStatement({
+      actions: [
+        'sns:CreatePlatformEndpoint',
+        'sns:DeleteEndpoint',
         'sns:GetEndpointAttributes',
         'sns:SetEndpointAttributes',
         'sns:Subscribe',
@@ -404,58 +438,9 @@ export class InfrastructureStack extends cdk.Stack {
     });
     grantAllTables(topicSubscribersLambda);
 
-    // ─── WebSocket Auth Lambda ────────────────────────────────────────────
-    const webSocketAuthLambda = new lambda.Function(this, 'McmWebSocketAuthLambda', {
-      runtime: lambda.Runtime.NODEJS_20_X,
-      handler: 'websocket-auth-lambda.handler',
-      code: lambdaCode,
-      environment: { USER_POOL_ID: userPool.userPoolId },
-    });
-
-    // ─── WebSocket Handler Lambda ─────────────────────────────────────────
-    const webSocketApi = new apigw2.WebSocketApi(this, 'McmAlertsWebSocketApi');
-    const webSocketStage = new apigw2.WebSocketStage(this, 'McmAlertsWebSocketStage', {
-      webSocketApi,
-      stageName: 'prod',
-      autoDeploy: true,
-    });
-
-    const webSocketHandler = new lambda.Function(this, 'McmWebSocketLambda', {
-      ...commonLambdaProps,
-      handler: 'websocket-lambda.handler',
-      environment: {
-        ...commonLambdaProps.environment,
-        WEBSOCKET_API_ENDPOINT: webSocketStage.url,
-      },
-    });
-    grantAllTables(webSocketHandler);
-    webSocketHandler.addToRolePolicy(new iam.PolicyStatement({
-      actions: ['execute-api:ManageConnections'],
-      resources: [`arn:aws:execute-api:${this.region}:${this.account}:${webSocketApi.apiId}/*`],
-    }));
-
-    const webSocketAuthorizer = new WebSocketLambdaAuthorizer(
-      'McmWebSocketAuthorizerV2',
-      webSocketAuthLambda,
-      { identitySource: ['route.request.querystring.token'] }
-    );
-
-    webSocketApi.addRoute('$connect', {
-      integration: new WebSocketLambdaIntegration('ConnectIntegration', webSocketHandler),
-      authorizer: webSocketAuthorizer,
-    });
-    webSocketApi.addRoute('$disconnect', {
-      integration: new WebSocketLambdaIntegration('DisconnectIntegration', webSocketHandler),
-    });
-    webSocketApi.addRoute('$default', {
-      integration: new WebSocketLambdaIntegration('DefaultIntegration', webSocketHandler),
-    });
-    webSocketApi.addRoute('ping', {
-      integration: new WebSocketLambdaIntegration('PingIntegration', webSocketHandler),
-    });
-
     // ─── API Routes ───────────────────────────────────────────────────────
     const apiLambdaInt = new apigateway.LambdaIntegration(apiLambda);
+    const apiLambda2Int = new apigateway.LambdaIntegration(apiLambda2);
     const notifLambdaInt = new apigateway.LambdaIntegration(notificationLambda);
     const ordersLambdaInt = new apigateway.LambdaIntegration(ordersApiLambda);
     const topicsSubLambdaInt = new apigateway.LambdaIntegration(topicSubscribersLambda);
@@ -468,19 +453,19 @@ export class InfrastructureStack extends cdk.Stack {
 
     // /users
     const users = api.root.addResource('users');
-    users.addMethod('GET', apiLambdaInt);
+    users.addMethod('GET', apiLambda2Int);
     const userById = users.addResource('{userId}');
-    userById.addMethod('GET', apiLambdaInt);
-    userById.addMethod('PUT', apiLambdaInt);
+    userById.addMethod('GET', apiLambda2Int);
+    userById.addMethod('PUT', apiLambda2Int);
 
     // /users/profile
     const userProfile = users.addResource('profile');
-    userProfile.addMethod('GET', apiLambdaInt);
-    userProfile.addMethod('PUT', apiLambdaInt);
+    userProfile.addMethod('GET', apiLambda2Int);
+    userProfile.addMethod('PUT', apiLambda2Int);
 
     // /teams
     const teams = api.root.addResource('teams');
-    teams.addMethod('GET', apiLambdaInt);
+    teams.addMethod('GET', apiLambda2Int);
 
     // /sites
     const sites = api.root.addResource('sites');
@@ -492,15 +477,17 @@ export class InfrastructureStack extends cdk.Stack {
 
     // /monitoring
     const monitoring = api.root.addResource('monitoring');
-    monitoring.addMethod('GET', apiLambdaInt);
+    monitoring.addMethod('GET', apiLambda2Int);
     monitoring.addResource('trigger').addMethod('POST', new apigateway.LambdaIntegration(monitoringLambda));
     monitoring.addResource('schedule').addMethod('PUT', new apigateway.LambdaIntegration(scheduleLambda));
 
     // /topics
     const topicsResource = api.root.addResource('topics');
-    topicsResource.addMethod('GET', apiLambdaInt);
-    topicsResource.addMethod('POST', apiLambdaInt);
+    topicsResource.addMethod('GET', apiLambda2Int);
+    topicsResource.addMethod('POST', apiLambda2Int);
     const topicById = topicsResource.addResource('{topicId}');
+    topicById.addMethod('PUT', apiLambda2Int);
+    topicById.addMethod('DELETE', apiLambda2Int);
     topicById.addResource('subscription').addMethod('POST', topicsSubLambdaInt);
     topicById.addResource('subscribers').addMethod('GET', topicsSubLambdaInt);
 
@@ -510,9 +497,7 @@ export class InfrastructureStack extends cdk.Stack {
     notificationsResource.addMethod('POST', notifLambdaInt, {
       authorizationType: apigateway.AuthorizationType.NONE,
     });
-    notificationsResource.addResource('test').addMethod('POST', notifLambdaInt, {
-      authorizationType: apigateway.AuthorizationType.NONE,
-    });
+    notificationsResource.addResource('test').addMethod('POST', notifLambdaInt);
     const notifById = notificationsResource.addResource('{notificationId}');
     notifById.addMethod('GET', notifLambdaInt);
     notifById.addMethod('PUT', notifLambdaInt);
@@ -527,9 +512,9 @@ export class InfrastructureStack extends cdk.Stack {
 
     // /webhooks
     const webhooks = api.root.addResource('webhooks');
-    webhooks.addMethod('GET', apiLambdaInt);
-    webhooks.addMethod('POST', apiLambdaInt);
-    webhooks.addResource('trigger').addResource('{id}').addMethod('POST', apiLambdaInt, {
+    webhooks.addMethod('GET', apiLambda2Int);
+    webhooks.addMethod('POST', apiLambda2Int);
+    webhooks.addResource('trigger').addResource('{id}').addMethod('POST', apiLambda2Int, {
       authorizationType: apigateway.AuthorizationType.NONE,
     });
 
@@ -542,12 +527,12 @@ export class InfrastructureStack extends cdk.Stack {
     api.root.addResource('audit-logs').addMethod('GET', apiLambdaInt);
 
     // /emails
-    api.root.addResource('emails').addMethod('GET', apiLambdaInt);
+    api.root.addResource('emails').addMethod('GET', apiLambda2Int);
 
     // /push-subscriptions
     const pushSubs = api.root.addResource('push-subscriptions');
-    pushSubs.addMethod('POST', apiLambdaInt);
-    pushSubs.addMethod('DELETE', apiLambdaInt);
+    pushSubs.addMethod('POST', apiLambda2Int);
+    pushSubs.addMethod('DELETE', apiLambda2Int);
 
     // ─── Outputs ──────────────────────────────────────────────────────────
     new cdk.CfnOutput(this, 'McmAlertsCloudFrontURL', {

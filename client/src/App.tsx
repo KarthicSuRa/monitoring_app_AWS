@@ -69,6 +69,8 @@ function App() {
   const navigate = useNavigate();
   const location = useLocation();
   const dataFetched = useRef(false);
+  const hasConnectedRef = useRef(false);
+  const notificationHandlerRef = useRef<(n: Notification) => void>();
 
   const currentPage = useMemo(() => {
     const path = location.pathname;
@@ -137,30 +139,33 @@ function App() {
       }
     }, [soundEnabled, addToast, notifications]);
 
-  useEffect(() => {
-    const handlePushMessage = (event: MessageEvent) => {
-        if (event.data && event.data.type === 'PUSH_NOTIFICATION') {
-            console.log('📨 Received push message from service worker:', event.data.notification);
-            const newNotification: Notification = event.data.notification;
-            handleNewNotification(newNotification);
-        }
-    };
+    notificationHandlerRef.current = handleNewNotification;
 
-    navigator.serviceWorker.addEventListener('message', handlePushMessage);
-
-    // WebSocket connection
-    if (profile) {
-      const cleanup = connectWebSocket(handleNewNotification);
-      return () => {
-        cleanup();
-        navigator.serviceWorker.removeEventListener('message', handlePushMessage);
+    useEffect(() => {
+      const handlePushMessage = (event: MessageEvent) => {
+          if (event.data && event.data.type === 'PUSH_NOTIFICATION') {
+              console.log('📨 Received push message from service worker:', event.data.notification);
+              notificationHandlerRef.current?.(event.data.notification);
+          }
       };
-    }
+  
+      navigator.serviceWorker.addEventListener('message', handlePushMessage);
+  
+      return () => {
+          navigator.serviceWorker.removeEventListener('message', handlePushMessage);
+      };
+    }, []);
 
-    return () => {
-        navigator.serviceWorker.removeEventListener('message', handlePushMessage);
-    };
-  }, [profile, handleNewNotification]);
+    useEffect(() => {
+      if (!profile || hasConnectedRef.current) return;
+      hasConnectedRef.current = true;
+
+      const cleanup = connectWebSocket((notification) => {
+        notificationHandlerRef.current?.(notification);
+      });
+  
+      return cleanup;
+    }, [profile]);
 
   const fetchInitialData = useCallback(async () => {
     if (dataFetched.current) return;
@@ -278,6 +283,7 @@ function App() {
 
     setProfile(null);
     dataFetched.current = false;
+    hasConnectedRef.current = false;
     setNotifications([]);
     setTopics([]);
     setSites([]);

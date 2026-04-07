@@ -7,6 +7,7 @@
  * expects when Platform = GCM (FCM HTTP v1 API).
  */
 const { SNSClient, PublishCommand } = require('@aws-sdk/client-sns');
+const { ApiGatewayManagementApiClient, PostToConnectionCommand } = require('@aws-sdk/client-apigatewaymanagementapi');
 const {
   TABLES, now, newId,
   getItem, putItem, updateItem, deleteItem,
@@ -14,6 +15,18 @@ const {
 } = require('./dynamo-client');
 
 const snsClient = new SNSClient({});
+let apiGw;
+function getApiGw() {
+  if (!apiGw) {
+    const endpoint = process.env.WEBSOCKET_API_ENDPOINT;
+    if (!endpoint) {
+      console.warn('WEBSOCKET_API_ENDPOINT not set, cannot send WebSocket messages.');
+      return null;
+    }
+    apiGw = new ApiGatewayManagementApiClient({ endpoint });
+  }
+  return apiGw;
+}
 
 // ─── CORS ─────────────────────────────────────────────────────────────────
 
@@ -37,6 +50,77 @@ const json = (status, body, cors = {}) => ({
   headers: { ...cors, 'Content-Type': 'application/json' },
   body: JSON.stringify(body || {}),
 });
+
+// ─── WebSocket Notifier ───────────────────────────────────────────────────
+
+const sendWebSocketNotification = async (notification, userId = null) => {
+  const apiGw = getApiGw();
+  if (!apiGw) return { error: 'WebSocket API not configured' };
+
+  let userIds = [];
+  // If a specific userId is provided (for test notifications), use it directly
+  if (userId) {
+    userIds = [userId];
+    console.log(`Sending direct WebSocket notification to user: ${userId}`);
+  } else {
+    // Otherwise, get all subscribers for the notification's topic
+    const topicSubscribers = await queryItems(TABLES.TOPIC_SUBSCRIPTIONS, {
+      IndexName: 'topic-id-index', // <-- FIXED: Use the correct GSI
+      KeyConditionExpression: 'topic_id = :tid',
+      ExpressionAttributeValues: { ':tid': notification.topic_id },
+    });
+    // Filter out any subscribers with a missing user_id to prevent errors
+    userIds = topicSubscribers.map(s => s.user_id).filter(Boolean);
+    console.log(`Found ${userIds.length} subscribers for topic ${notification.topic_id}`);
+  }
+  
+  if (userIds.length === 0) {
+    console.log('No WebSocket recipients found.');
+    return { status: 'No recipients' };
+  }
+
+  // Get all active connections for these users
+  const allConnections = (await Promise.all(
+    userIds.map(uid => 
+      queryItems(TABLES.WEBSOCKET_CONNECTIONS, { 
+        IndexName: 'user-id-index', 
+        KeyConditionExpression: 'user_id = :uid',
+        ExpressionAttributeValues: { ':uid': uid }
+      })
+    )
+  )).flat();
+  
+  if (allConnections.length === 0) {
+    console.log('No active WebSocket connections for the recipients.');
+    return { status: 'No active connections' };
+  }
+
+  const message = JSON.stringify({
+    type: 'NEW_NOTIFICATION',
+    notification,
+  });
+
+  const postCalls = allConnections.map(async ({ connection_id }) => {
+    try {
+      await apiGw.send(new PostToConnectionCommand({
+        ConnectionId: connection_id,
+        Data: message,
+      }));
+    } catch (e) {
+      // 410 Gone indicates a stale connection. It's safe to delete.
+      if (e.statusCode === 410) {
+        await deleteItem(TABLES.WEBSOCKET_CONNECTIONS, { connection_id });
+      } else {
+        console.error(`Failed to post to connection ${connection_id}:`, e.message);
+      }
+    }
+  });
+
+  await Promise.all(postCalls);
+  console.log(`Sent WebSocket notifications to ${allConnections.length} connections.`);
+  return { sent_to: allConnections.length };
+};
+
 
 // ─── FCM v1 via SNS (FIXED PAYLOAD) ──────────────────────────────────────
 /**
@@ -138,6 +222,7 @@ async function handleNotifications(method, path, body, user, cors) {
       return json(400, { error: 'title and severity are required' }, cors);
 
     let finalTopicId = topic_id || null;
+    // If a topic_name is provided, find or create the topic
     if (topic_name && !finalTopicId) {
       const topicItems = await queryItems(TABLES.TOPICS, {
         IndexName: 'name-index',
@@ -146,7 +231,42 @@ async function handleNotifications(method, path, body, user, cors) {
         ExpressionAttributeValues: { ':name': topic_name },
         Limit: 1,
       });
-      if (topicItems.length > 0) finalTopicId = topicItems[0].id;
+      if (topicItems.length > 0) {
+        finalTopicId = topicItems[0].id;
+      } else {
+        // Topic not found, create it
+        finalTopicId = newId();
+        await putItem(TABLES.TOPICS, {
+          id: finalTopicId,
+          name: topic_name,
+          created_at: now(),
+          updated_at: now(),
+        });
+      }
+    }
+
+    // If no topic_id could be determined, use/create a "General" topic
+    if (!finalTopicId) {
+      const generalTopicName = 'General';
+      const topicItems = await queryItems(TABLES.TOPICS, {
+        IndexName: 'name-index',
+        KeyConditionExpression: '#n = :name',
+        ExpressionAttributeNames: { '#n': 'name' },
+        ExpressionAttributeValues: { ':name': generalTopicName },
+        Limit: 1,
+      });
+      if (topicItems.length > 0) {
+        finalTopicId = topicItems[0].id;
+      } else {
+        // "General" topic not found, create it
+        finalTopicId = newId();
+        await putItem(TABLES.TOPICS, {
+          id: finalTopicId,
+          name: generalTopicName,
+          created_at: now(),
+          updated_at: now(),
+        });
+      }
     }
 
     const ts = now();
@@ -163,21 +283,40 @@ async function handleNotifications(method, path, body, user, cors) {
       updated_at: ts,
     };
     await putItem(TABLES.NOTIFICATIONS, item);
+
+    // Fan out to both push and websocket
     const pushResult = await sendSnsPush(item);
-    return json(201, { ...item, push_notification: pushResult }, cors);
+    const wsResult = await sendWebSocketNotification(item);
+
+    return json(201, { ...item, push_notification: pushResult, websocket_notification: wsResult }, cors);
   }
+
+  // Auth required below
+  if (!user) return json(401, { error: 'Unauthorized' }, cors);
 
   // ── POST /notifications/test ──────────────────────────────────────────
   if (method === 'POST' && isTest) {
     let topicId = null;
+    const topicName = 'Site Monitoring';
     const topicItems = await queryItems(TABLES.TOPICS, {
       IndexName: 'name-index',
       KeyConditionExpression: '#n = :name',
       ExpressionAttributeNames: { '#n': 'name' },
-      ExpressionAttributeValues: { ':name': 'Site Monitoring' },
+      ExpressionAttributeValues: { ':name': topicName },
       Limit: 1,
     });
-    if (topicItems.length > 0) topicId = topicItems[0].id;
+    if (topicItems.length > 0) {
+      topicId = topicItems[0].id;
+    } else {
+      // "Site Monitoring" topic not found, create it
+      topicId = newId();
+      await putItem(TABLES.TOPICS, {
+        id: topicId,
+        name: topicName,
+        created_at: now(),
+        updated_at: now(),
+      });
+    }
 
     const ts = now();
     const item = {
@@ -188,17 +327,18 @@ async function handleNotifications(method, path, body, user, cors) {
       severity: 'low',
       status: 'new',
       type: 'manual',
-      metadata: null,
+      metadata: { sent_by: user.id },
       created_at: ts,
       updated_at: ts,
     };
     await putItem(TABLES.NOTIFICATIONS, item);
-    const pushResult = await sendSnsPush(item);
-    return json(201, { ...item, push_notification: pushResult }, cors);
-  }
 
-  // Auth required below
-  if (!user) return json(401, { error: 'Unauthorized' }, cors);
+    // Fan out to push (optional) and a direct websocket message to the user
+    const pushResult = await sendSnsPush(item);
+    const wsResult = await sendWebSocketNotification(item, user.id);
+
+    return json(201, { ...item, push_notification: pushResult, websocket_notification: wsResult }, cors);
+  }
 
   // ── POST /notifications/:id/comments ─────────────────────────────────
   if (notificationId && isComments && method === 'POST') {
@@ -291,7 +431,7 @@ exports.handler = async (event) => {
   const method = event.httpMethod;
 
   // Public endpoints
-  const isPublic = method === 'POST' && (path === '/notifications' || path === '/notifications/test');
+  const isPublic = method === 'POST' && path === '/notifications';
 
   let user = null;
   if (!isPublic) {

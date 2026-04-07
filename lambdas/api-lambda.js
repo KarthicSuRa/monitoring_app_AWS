@@ -154,10 +154,11 @@ async function handleSites(method, pathParts, body, cors) {
 
 // ─── TOPICS ───────────────────────────────────────────────────────────────
 
-async function handleTopics(method, body, user, cors) {
-  if (method === 'GET') {
+async function handleTopics(method, pathParts, body, user, cors) {
+  const topicId = pathParts[1];
+
+  if (method === 'GET' && !topicId) {
     const allTopics = await scanItems(TABLES.TOPICS);
-    // Check subscription status for this user
     const subs = await queryItems(TABLES.TOPIC_SUBSCRIPTIONS, {
       KeyConditionExpression: 'user_id = :uid',
       ExpressionAttributeValues: { ':uid': user.id },
@@ -167,7 +168,8 @@ async function handleTopics(method, body, user, cors) {
     enriched.sort((a, b) => a.name.localeCompare(b.name));
     return json(200, enriched, cors);
   }
-  if (method === 'POST') {
+
+  if (method === 'POST' && !topicId) {
     const { name, description } = body;
     if (!name) return json(400, { error: 'Topic name is required' }, cors);
     const ts = now();
@@ -175,8 +177,45 @@ async function handleTopics(method, body, user, cors) {
     await putItem(TABLES.TOPICS, item);
     return json(201, item, cors);
   }
+
+  if (method === 'PUT' && topicId) {
+    const { name, description } = body;
+    if (!name) return json(400, { error: 'Topic name must be provided for update' }, cors);
+    const updated = await updateItem(
+      TABLES.TOPICS,
+      { id: topicId },
+      { name, description: description || null, updated_at: now() }
+    );
+    return json(200, updated, cors);
+  }
+
+  if (method === 'DELETE' && topicId) {
+    const topic = await getItem(TABLES.TOPICS, { id: topicId });
+    if (!topic) {
+      return json(404, { error: 'Topic not found' }, cors);
+    }
+
+    const subscriptions = await queryItems(TABLES.TOPIC_SUBSCRIPTIONS, {
+        IndexName: 'topic-id-index',
+        KeyConditionExpression: 'topic_id = :tid',
+        ExpressionAttributeValues: { ':tid': topicId },
+    });
+
+    if (subscriptions && subscriptions.length > 0) {
+        const deletePromises = subscriptions.map(sub =>
+            deleteItem(TABLES.TOPIC_SUBSCRIPTIONS, { user_id: sub.user_id, topic_id: sub.topic_id })
+        );
+        await Promise.all(deletePromises);
+    }
+
+    await deleteItem(TABLES.TOPICS, { id: topicId });
+
+    return json(204, {}, cors);
+  }
+
   return json(405, { error: 'Method not allowed' }, cors);
 }
+
 
 // ─── WEBHOOKS ─────────────────────────────────────────────────────────────
 
@@ -389,7 +428,7 @@ exports.handler = async (event) => {
     if (base === 'teams')             return await handleTeams(method, body, user, cors);
     if (base === 'sites')             return await handleSites(method, pathParts, body, cors);
     if (base === 'monitoring')        return await handleMonitoring(method, event, cors);
-    if (base === 'topics')            return await handleTopics(method, body, user, cors);
+    if (base === 'topics')            return await handleTopics(method, pathParts, body, user, cors);
     if (base === 'webhooks')          return await handleWebhooks(method, pathParts, body, user, cors);
     if (base === 'calendar')          return await handleCalendar(method, body, cors);
     if (base === 'audit-logs')        return await handleAuditLogs(method, cors);

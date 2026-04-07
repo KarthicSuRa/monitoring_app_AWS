@@ -2,6 +2,7 @@ import React from 'react';
 import { Card, Flex, Text, Metric } from '@tremor/react';
 import { MonitoredSite } from '../../types';
 import { cn } from '../../lib/utils';
+import { formatDateTime } from '../../lib/formatters';
 
 interface CurrentStatusCardProps {
     site: MonitoredSite;
@@ -24,7 +25,7 @@ export const CurrentStatusCard: React.FC<CurrentStatusCardProps> = ({ site }) =>
             </Flex>
              <div className="mt-4">
                 <span className={cn("inline-block w-3 h-3 rounded-full", statusColor)}></span>
-                <Text className="ml-2">{site.latest_ping?.checked_at ? new Date(site.latest_ping.checked_at).toLocaleString() : 'No data'}</Text>
+                <Text className="ml-2">{formatDateTime(site.latest_ping?.checked_at)}</Text>
             </div>
         </Card>
     );

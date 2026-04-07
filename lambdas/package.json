@@ -4,12 +4,12 @@
   "description": "Dependencies for MCM Alerts Lambdas (DynamoDB)",
   "main": "api-lambda.js",
   "dependencies": {
-    "@aws-sdk/client-dynamodb": "^3.600.0",
-    "@aws-sdk/lib-dynamodb": "^3.600.0",
-    "@aws-sdk/client-sns": "^3.600.0",
-    "@aws-sdk/client-lambda": "^3.600.0",
     "@aws-sdk/client-apigatewaymanagementapi": "^3.600.0",
+    "@aws-sdk/client-dynamodb": "^3.600.0",
+    "@aws-sdk/client-lambda": "^3.600.0",
+    "@aws-sdk/client-sns": "^3.600.0",
+    "@aws-sdk/lib-dynamodb": "^3.600.0",
     "aws-jwt-verify": "^4.0.0",
-    "uuid": "^9.0.0"
+    "uuid": "^9.0.1"
   }
 }

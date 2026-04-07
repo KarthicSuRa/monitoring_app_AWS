@@ -1,3 +1,4 @@
+
 import { config } from '../config';
 import { getCurrentUser } from './cognitoClient';
 import { Notification } from '../types';
@@ -83,74 +84,129 @@ export const getMonitoringApiUrl = (siteId: string) => {
   return `${sanitizedApiUrlBase}/monitoring?siteId=${siteId}`;
 };
 
-export const connectWebSocket = (onNotification: (notification: Notification) => void) => {
-  const wsUrl = config.websocket.invokeUrl;
-  
-  let socket: WebSocket | null = null;
-  let reconnectInterval: NodeJS.Timeout | null = null;
 
-  const connect = async () => {
-    try {
-      const session = await getCurrentUser();
-      if (!session || !session.isValid()) {
-        console.log("No valid session, WebSocket connection deferred.");
+// --- WebSocket Singleton ---
+
+let socket: WebSocket | null = null;
+let pingInterval: NodeJS.Timeout | null = null;
+let reconnectTimeout: NodeJS.Timeout | null = null;
+let isConnecting = false;
+let onNotificationCallback: ((notification: Notification) => void) | null = null;
+
+const disconnect = () => {
+    if (pingInterval) clearInterval(pingInterval);
+    if (reconnectTimeout) clearTimeout(reconnectTimeout);
+    if (socket) {
+        socket.onclose = null; // Prevent reconnect logic from firing on manual close
+        socket.close();
+    }
+    socket = null;
+    pingInterval = null;
+    reconnectTimeout = null;
+    isConnecting = false;
+};
+
+const connect = async () => {
+    if ((socket && socket.readyState === WebSocket.OPEN) || isConnecting) {
+        console.log("WebSocket connection attempt skipped: already connected or connecting.");
         return;
-      }
-      
-      const token = session.getIdToken().getJwtToken();
-      const authenticatedWsUrl = `${wsUrl}?token=${token}`;
-      
-      console.log('Attempting to connect WebSocket...');
-      socket = new WebSocket(authenticatedWsUrl);
+    }
 
-      socket.onopen = () => {
-        console.log('WebSocket connected successfully.');
-        if (reconnectInterval) {
-          clearInterval(reconnectInterval);
-          reconnectInterval = null;
+    isConnecting = true;
+    console.log('Attempting to connect WebSocket...');
+
+    try {
+        const session = await getCurrentUser();
+        if (!session || !session.isValid()) {
+            console.log("No valid session, WebSocket connection deferred.");
+            isConnecting = false;
+            if (!reconnectTimeout) {
+                reconnectTimeout = setTimeout(() => {
+                    reconnectTimeout = null;
+                    connect();
+                }, 5000);
+            }
+            return;
         }
-      };
 
-      socket.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          if (data.type === 'NEW_NOTIFICATION') {
-            console.log('Received new notification via WebSocket:', data.notification);
-            onNotification(data.notification as Notification);
-          }
-        } catch (error) {
-          console.error('Error processing WebSocket message:', error);
+        if (reconnectTimeout) {
+            clearTimeout(reconnectTimeout);
+            reconnectTimeout = null;
         }
-      };
 
-      socket.onclose = (event) => {
-        console.warn(`WebSocket closed. Code: ${event.code}, Reason: ${event.reason}. Reconnecting...`);
-        if (!reconnectInterval) {
-            reconnectInterval = setInterval(connect, 5000); // Attempt to reconnect every 5 seconds
-        }
-      };
+        const token = session.getIdToken().getJwtToken();
+        const authenticatedWsUrl = `${config.websocket.invokeUrl}?token=${token}`;
 
-      socket.onerror = (error) => {
-        console.error('WebSocket error:', error);
-        socket?.close(); // This will trigger the onclose event and reconnection logic
-      };
+        socket = new WebSocket(authenticatedWsUrl);
+
+        socket.onopen = () => {
+            console.log('WebSocket connected successfully.');
+            isConnecting = false;
+            if (reconnectTimeout) {
+                clearTimeout(reconnectTimeout);
+                reconnectTimeout = null;
+            }
+            pingInterval = setInterval(() => {
+                if (socket?.readyState === WebSocket.OPEN) {
+                    socket.send(JSON.stringify({ action: 'ping' }));
+                }
+            }, 30000);
+        };
+
+        socket.onmessage = (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                if (data.type === 'pong') {
+                    return;
+                }
+                if (data.type === 'NEW_NOTIFICATION' && onNotificationCallback) {
+                    console.log('Received new notification via WebSocket:', data.notification);
+                    onNotificationCallback(data.notification as Notification);
+                }
+            } catch (error) {
+                console.error('Error processing WebSocket message:', error);
+            }
+        };
+
+        socket.onclose = (event) => {
+            console.warn(`WebSocket closed. Code: ${event.code}, Reason: ${event.reason}. Reconnecting...`);
+            if (pingInterval) clearInterval(pingInterval);
+            pingInterval = null;
+            socket = null;
+            isConnecting = false;
+            if (!reconnectTimeout) {
+                reconnectTimeout = setTimeout(() => {
+                    reconnectTimeout = null;
+                    connect();
+                }, 5000);
+            }
+        };
+
+        socket.onerror = (error) => {
+            console.error('WebSocket error:', error);
+            isConnecting = false;
+            socket?.close();
+        };
 
     } catch (error) {
         console.error('Could not establish WebSocket connection due to authentication error:', error);
-        if (!reconnectInterval) {
-            reconnectInterval = setInterval(connect, 5000);
+        isConnecting = false;
+        if (!reconnectTimeout) {
+            reconnectTimeout = setTimeout(() => {
+                reconnectTimeout = null;
+                connect();
+            }, 5000);
         }
     }
-  };
+};
 
-  connect();
+export const connectWebSocket = (onNotification: (notification: Notification) => void) => {
+    onNotificationCallback = onNotification;
+    connect();
 
-  return () => {
-    if (reconnectInterval) {
-      clearInterval(reconnectInterval);
-    }
-    if (socket) {
-      socket.close();
-    }
-  };
+    return () => {
+        console.log("Cleaning up WebSocket connection.");
+        disconnect();
+        onNotificationCallback = null;
+    };
 };

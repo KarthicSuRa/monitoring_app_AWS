@@ -92,7 +92,7 @@ exports.handler = async (event) => {
 
     try {
         const payload = await verifyToken(token);
-        const userId = payload['cognito:username'];
+        const userId = payload.sub;
         console.log(`Successfully authenticated user: ${userId}`);
 
         return {

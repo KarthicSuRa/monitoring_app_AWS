@@ -85,18 +85,16 @@ export const SiteDetailPage: React.FC<SiteDetailPageProps> = ({
                     </Grid>
 
                     <ResponseTimeChart pings={site.ping_logs || []} />
-
-                    <Grid numItemsMd={3} className="gap-6">
-                        <UptimeCard label="Last 24 hours" stats={uptime24h} />
-                        <UptimeCard label="Last 7 days" stats={uptime7d} />
-                        <UptimeCard label="Last 30 days" stats={uptime30d} />
-                    </Grid>
+                    
+                    <LatestIncidents incidents={site.incidents || []} />
                 </div>
 
                 {/* Right Sidebar */}
                 <div className="lg:col-span-1 space-y-6">
                     <SiteInfoSidebar site={site} />
-                    <LatestIncidents incidents={site.incidents || []} />
+                    <UptimeCard label="Last 24 hours" stats={uptime24h} />
+                    <UptimeCard label="Last 7 days" stats={uptime7d} />
+                    <UptimeCard label="Last 30 days" stats={uptime30d} />
                 </div>
             </Grid>
         </div>

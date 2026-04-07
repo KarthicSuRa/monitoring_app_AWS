@@ -7,7 +7,7 @@ const FEATURES = [
   {
     icon: '📊',
     title: 'Centralized Dashboard',
-    desc: 'Bird's-eye view of all site alerts, notifications and incidents in one real-time pane.',
+    desc: "Birds-eye view of all site alerts, notifications and incidents in one real-time pane.",
     gradient: 'from-blue-500/20 to-blue-600/5',
     border: 'border-blue-500/20',
     glow: 'group-hover:shadow-blue-500/20',
