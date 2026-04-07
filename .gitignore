@@ -23,3 +23,4 @@ lambdas/package-lock.json
 .idea/
 .vscode/
 *.DS_Store
+infrastructure/lib/fcm-service-account.json
