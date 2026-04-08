@@ -272,7 +272,10 @@ export class InfrastructureStack extends cdk.Stack {
     // Grant permission to publish to any endpoint in the FCM platform application
     notificationLambda.addToRolePolicy(new iam.PolicyStatement({
       actions: ['sns:Publish'],
-      resources: [fcmPlatformApplicationArn], 
+      resources: [
+        fcmPlatformApplicationArn,
+        `${fcmPlatformApplicationArn.replace(':app/', ':endpoint/')}/*`,
+      ],
     }));
 
 

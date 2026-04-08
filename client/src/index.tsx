@@ -1,6 +1,4 @@
 
-import { registerSW } from 'virtual:pwa-register';
-
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
@@ -21,12 +19,8 @@ if (!rootElement) {
   throw new Error("Could not find root element to mount to");
 }
 
-// Register the service worker with error handling
-registerSW({ 
-  onRegisterError(error: any) {
-    console.error('SW registration error:', error);
-  }
-});
+// Service worker is registered by App.tsx after authentication,
+// passing the registration to Firebase getToken() for FCM token binding.
 
 const root = ReactDOM.createRoot(rootElement);
 root.render(

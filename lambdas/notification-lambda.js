@@ -161,9 +161,11 @@ const sendSnsPushToUser = async (notification, userId) => {
     },
   };
 
+  // FCM HTTP v1 via SNS requires the payload wrapped in a top-level "message" key.
+  // SNS returns success on PublishCommand regardless — FCM silently drops malformed payloads.
   const snsPayload = {
     default: `MCM Alert: ${notification.title}`,
-    GCM: JSON.stringify(fcmMessage),
+    GCM: JSON.stringify({ message: fcmMessage }),
   };
 
   const publishPromises = subs.map(sub => {

@@ -1,6 +1,10 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
-import { VitePWA } from 'vite-plugin-pwa';
+
+// VitePWA deliberately removed — it was configured with filename 'firebase-messaging-sw.js'
+// which caused the build to OVERWRITE our Firebase messaging SW with a Workbox SW,
+// silently discarding all background push messages.
+// The firebase-messaging-sw.js in /public/ is served as-is by Vite and copied to /dist.
 
 export default defineConfig({
   define: {
@@ -8,11 +12,6 @@ export default defineConfig({
   },
   plugins: [
     react(),
-    VitePWA({
-      registerType: 'autoUpdate',
-      srcDir: 'src',
-      filename: 'firebase-messaging-sw.js'
-    })
   ],
   server: {
     host: '0.0.0.0',

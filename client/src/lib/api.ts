@@ -25,6 +25,10 @@ export const updateNotification = (id: string, update: Partial<Notification>): P
 export const addComment = (notificationId: string, comment: { text: string }): Promise<Comment> => apiClient.post(`/notifications/${notificationId}/comments`, comment);
 export const sendTestAlert = (): Promise<void> => apiClient.post('/notifications/test', {});
 
+// Push Notifications
+export const subscribePushNotification = (token: string): Promise<void> => apiClient.post('/push-subscriptions', { token });
+export const unsubscribePushNotification = (token: string): Promise<void> => apiClient.delete(`/push-subscriptions?token=${encodeURIComponent(token)}`);
+
 // User & Team Management
 export const getUsers = (): Promise<User[]> => apiClient.get('/users');
 export const updateUser = (userId: string, updates: Partial<User>): Promise<User> => apiClient.put(`/users/${userId}`, updates);

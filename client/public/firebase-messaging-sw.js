@@ -1,5 +1,5 @@
-importScripts('https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js');
-importScripts('https://www.gstatic.com/firebasejs/10.12.0/firebase-messaging-compat.js');
+importScripts('https://www.gstatic.com/firebasejs/12.11.0/firebase-app-compat.js');
+importScripts('https://www.gstatic.com/firebasejs/12.11.0/firebase-messaging-compat.js');
 
 firebase.initializeApp({
   apiKey: "AIzaSyA7p75CN43xLBQLr4K7wa4Bb3N8zFUHe8c",
@@ -25,5 +25,48 @@ messaging.onBackgroundMessage(function(payload) {
     data: payload.data
   };
 
+  // Forward the background push to any open app clients so it appears in the in-app toast list
+  clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function(clientList) {
+    for (const client of clientList) {
+      if (client.url.startsWith(self.location.origin)) {
+        client.postMessage({ 
+          type: 'PUSH_NOTIFICATION', 
+          notification: {
+            id: payload.messageId || `bg-${Date.now()}`,
+            title: notificationTitle,
+            message: notificationOptions.body,
+            severity: payload.data?.severity || 'high',
+            type: 'push',
+            timestamp: new Date().toISOString(),
+            topic_id: payload.data?.topic_id || null,
+            status: 'new'
+          }
+        });
+      }
+    }
+  });
+
   return self.registration.showNotification(notificationTitle, notificationOptions);
+});
+
+// Open (or focus) the app when the user clicks a push notification
+self.addEventListener('notificationclick', function(event) {
+  event.notification.close();
+
+  const targetUrl = event.notification.data?.click_action || '/';
+
+  event.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function(clientList) {
+      // If a window is already open, focus it
+      for (const client of clientList) {
+        if (client.url.startsWith(self.location.origin) && 'focus' in client) {
+          return client.focus();
+        }
+      }
+      // Otherwise open a new window
+      if (clients.openWindow) {
+        return clients.openWindow(targetUrl);
+      }
+    })
+  );
 });

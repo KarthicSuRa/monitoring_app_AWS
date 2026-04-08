@@ -1,5 +1,5 @@
 import { initializeApp } from 'firebase/app';
-import { getMessaging, getToken, onMessage } from 'firebase/messaging';
+import { getMessaging, getToken, onMessage, MessagePayload } from 'firebase/messaging';
 
 const firebaseConfig = {
   apiKey: "AIzaSyA7p75CN43xLBQLr4K7wa4Bb3N8zFUHe8c",
@@ -35,9 +35,8 @@ export const requestForToken = async (registration: ServiceWorkerRegistration) =
   }
 };
 
-export const onMessageListener = () =>
-  new Promise((resolve) => {
-    onMessage(messaging, (payload) => {
-      resolve(payload);
-    });
+export const onMessageListener = (callback: (payload: MessagePayload) => void) => {
+  return onMessage(messaging, (payload: MessagePayload) => {
+    callback(payload);
   });
+};

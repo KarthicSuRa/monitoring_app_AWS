@@ -45,7 +45,8 @@ import {
   deleteTopic as apiDeleteTopic, 
   toggleTopicSubscription,
   sendTestAlert as apiSendTestAlert,
-  connectWebSocket
+  connectWebSocket,
+  subscribePushNotification
 } from './lib/api';
 import { requestForToken, onMessageListener } from './lib/firebase';
 
@@ -248,6 +249,15 @@ function App() {
         
         const token = await requestForToken(registration);
         setIsPushEnabled(!!token);
+
+        if (token) {
+          try {
+            await subscribePushNotification(token);
+            console.log('✅ FCM token registered with backend successfully.');
+          } catch (backendErr) {
+            console.error('❌ Failed to register push token with backend:', backendErr);
+          }
+        }
 
         unsubscribeFromOnMessage = onMessage(messaging, (payload: any) => {
           console.log('Received foreground message: ', payload);

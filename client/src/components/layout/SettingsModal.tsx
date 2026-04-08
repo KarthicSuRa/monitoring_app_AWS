@@ -2,6 +2,7 @@ import React from 'react';
 import { Icon } from '../ui/Icon';
 import { Switch } from '../ui/Switch';
 import { requestForToken } from '../../lib/firebase';
+import { subscribePushNotification } from '../../lib/api';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -67,7 +68,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           const registration = await navigator.serviceWorker.register('/firebase-messaging-sw.js');
           const token = await requestForToken(registration);
           if (token) {
+            // Register the FCM token with the backend so SNS can deliver to this device
+            await subscribePushNotification(token);
             setIsPushEnabled(true);
+            console.log('✅ Push re-enabled and token registered with backend.');
           } else {
             setIsPushEnabled(false);
           }
