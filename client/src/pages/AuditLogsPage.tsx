@@ -3,6 +3,8 @@ import { Header } from '../components/layout/Header';
 import { Notification, AuditLog, SystemStatusData, Comment, User } from '../types';
 import { Icon } from '../components/ui/Icon';
 
+// ─── Types ──────────────────────────────────────────────────────────────────
+
 interface AuditLogsPageProps {
   notifications: Notification[];
   onNavigate: (page: string) => void;
@@ -14,6 +16,8 @@ interface AuditLogsPageProps {
   user: User | null;
   userNames: Map<string, string>;
 }
+
+// ─── Data Generation ────────────────────────────────────────────────────────
 
 const generateAuditLogs = (notifications: Notification[], userNames: Map<string, string>): AuditLog[] => {
     const logs: AuditLog[] = [];
@@ -29,7 +33,6 @@ const generateAuditLogs = (notifications: Notification[], userNames: Map<string,
         });
 
         n.comments.forEach((c: Comment) => {
-            // Simplified and safer action determination
             let action = 'Commented';
             if (c.text.includes('Status changed to Acknowledged')) action = 'Acknowledged';
             else if (c.text.includes('Status changed to Resolved')) action = 'Resolved';
@@ -48,42 +51,67 @@ const generateAuditLogs = (notifications: Notification[], userNames: Map<string,
     return logs.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 };
 
-const getActionStyling = (action: string): { icon: string; color: string } => {
+// ─── Helper Components ──────────────────────────────────────────────────────
+
+const getActionStyling = (action: string): { icon: string; color: string; label: string } => {
     switch(action) {
-        case 'Created': return { icon: 'plus-circle', color: 'text-blue-500' };
-        case 'Acknowledged': return { icon: 'check-circle', color: 'text-green-500' };
-        case 'Resolved': return { icon: 'shield-check', color: 'text-purple-500' };
-        case 'Re-opened': return { icon: 'refresh-cw', color: 'text-yellow-500' };
-        case 'Commented': return { icon: 'message-square', color: 'text-gray-500' };
-        default: return { icon: 'file-text', color: 'text-gray-400' };
+        case 'Created':      return { icon: 'plus-circle',    color: 'text-blue-400',      label: 'Created' };
+        case 'Acknowledged': return { icon: 'check-circle',   color: 'text-green-400',     label: 'Acknowledged' };
+        case 'Resolved':     return { icon: 'shield-check',   color: 'text-violet-400',    label: 'Resolved' };
+        case 'Re-opened':    return { icon: 'refresh-cw',     color: 'text-amber-400',     label: 'Re-opened' };
+        case 'Commented':    return { icon: 'message-square', color: 'text-slate-400',     label: 'Commented' };
+        default:             return { icon: 'file-text',      color: 'text-slate-500',     label: 'Log' };
     }
 }
 
-export const AuditLogsPage: React.FC<AuditLogsPageProps> = ({ 
-    notifications, 
-    onNavigate, 
-    onLogout, 
-    isSidebarOpen, 
-    setIsSidebarOpen, 
-    openSettings, 
-    systemStatus, 
-    user, 
-    userNames 
-}) => {
+const AuditLogRow: React.FC<{ log: AuditLog, userName: string, notificationTitle?: string }> = ({ log, userName, notificationTitle }) => {
+    const { icon, color, label } = getActionStyling(log.action);
+    
+    return (
+        <tr className="border-b border-slate-800 hover:bg-slate-800/50 transition-colors">
+            <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-400">
+                {new Date(log.timestamp).toLocaleString()}
+            </td>
+            <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-white">
+                {userName}
+            </td>
+            <td className="px-6 py-4 whitespace-nowrap">
+                <span className={`flex items-center gap-2 text-sm font-medium ${color}`}>
+                    <Icon name={icon as any} className="w-4 h-4" />
+                    {label}
+                </span>
+            </td>
+            <td className="px-6 py-4 text-sm text-slate-400 max-w-md truncate" title={log.details}>
+                {log.details}
+            </td>
+            <td className="px-6 py-4 whitespace-nowrap text-sm">
+                {notificationTitle ? (
+                    <span className="px-2 py-1 text-xs font-semibold rounded-full bg-slate-700/70 text-slate-300">
+                        {notificationTitle}
+                    </span>
+                ) : <span className="text-slate-600">N/A</span>}
+            </td>
+        </tr>
+    );
+};
+
+// ─── Main Page Component ────────────────────────────────────────────────────
+
+export const AuditLogsPage: React.FC<AuditLogsPageProps> = (props) => {
+    const { notifications, onNavigate, user, userNames } = props;
     const [searchTerm, setSearchTerm] = useState('');
     const [timeFilter, setTimeFilter] = useState('all');
 
+    const auditLogs = useMemo(() => generateAuditLogs(notifications, userNames), [notifications, userNames]);
+
     const filteredLogs = useMemo(() => {
-        let logs = generateAuditLogs(notifications, userNames);
+        let logs = auditLogs;
 
         if (timeFilter !== 'all') {
             const now = new Date();
             const filterDate = new Date();
-            if (timeFilter === '24h') {
-                filterDate.setHours(now.getHours() - 24);
-            } else if (timeFilter === '7d') {
-                filterDate.setDate(now.getDate() - 7);
-            }
+            if (timeFilter === '24h') filterDate.setHours(now.getHours() - 24);
+            else if (timeFilter === '7d') filterDate.setDate(now.getDate() - 7);
             logs = logs.filter(log => new Date(log.timestamp) > filterDate);
         }
 
@@ -100,41 +128,42 @@ export const AuditLogsPage: React.FC<AuditLogsPageProps> = ({
         }
 
         return logs;
-    }, [notifications, searchTerm, timeFilter, userNames]);
+    }, [auditLogs, searchTerm, timeFilter, userNames]);
 
     const getNotificationById = (id: string | null) => id ? notifications.find(n => n.id === id) : undefined;
 
     return (
-    <>
-        <Header onLogout={onLogout} notifications={notifications} isSidebarOpen={isSidebarOpen} setIsSidebarOpen={setIsSidebarOpen} openSettings={openSettings} systemStatus={systemStatus} profile={user} onNavigate={onNavigate} />
-        <main className="flex-1 overflow-y-auto bg-background md:ml-72">
-            <div className="max-w-screen-2xl mx-auto p-4 sm:p-6 lg:p-8">
+    <div className="flex flex-col h-screen bg-slate-950 md:ml-72">
+        <Header {...props} profile={user} title="Audit Logs" />
+
+        <main className="flex-1 overflow-y-auto p-4 md:p-8">
+            <div className="max-w-7xl mx-auto">
                 <div className="flex items-center mb-6">
-                    <button onClick={() => onNavigate('dashboard')} className="p-2 rounded-full hover:bg-muted mr-4">
-                        <Icon name="arrow-left" className="h-5 w-5 text-foreground" />
+                    <button onClick={() => onNavigate('dashboard')} className="p-2 rounded-full hover:bg-slate-800 mr-3">
+                        <Icon name="arrow-left" className="h-5 w-5 text-slate-400" />
                     </button>
                     <div>
-                        <h1 className="text-3xl font-bold text-foreground">Audit Logs</h1>
-                        <p className="text-muted-foreground mt-1">A detailed history of all notification events and user actions.</p>
+                        <h1 className="text-2xl font-bold text-white">Audit Logs</h1>
+                        <p className="text-slate-400 mt-1">A detailed history of all notification events and user actions.</p>
                     </div>
                 </div>
                 
-                <div className="bg-card rounded-xl border shadow-sm overflow-hidden">
-                    <div className="p-4 flex flex-col sm:flex-row gap-4 border-b">
+                <div className="bg-slate-900/70 backdrop-blur border border-slate-800 rounded-xl overflow-hidden">
+                    <div className="p-4 flex flex-col sm:flex-row gap-3 border-b border-slate-800">
                         <div className="relative flex-grow">
-                            <Icon name="search" className="w-5 h-5 text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2" />
+                            <Icon name="search" className="w-5 h-5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
                             <input
                                 type="text"
-                                placeholder="Search logs by user, action, or details..."
+                                placeholder="Search by user, action, or details..."
                                 value={searchTerm}
                                 onChange={e => setSearchTerm(e.target.value)}
-                                className="w-full pl-10 pr-4 py-2 text-sm rounded-md border bg-transparent focus:ring-primary focus:border-primary"
+                                className="w-full pl-10 pr-4 py-2 text-sm rounded-lg border border-slate-700 bg-slate-800/50 text-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
                             />
                         </div>
                         <select
                             value={timeFilter}
                             onChange={e => setTimeFilter(e.target.value)}
-                            className="text-sm rounded-md border bg-transparent focus:ring-primary focus:border-primary"
+                            className="text-sm rounded-lg border border-slate-700 bg-slate-800/50 text-white px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
                         >
                             <option value="all">All Time</option>
                             <option value="24h">Last 24 hours</option>
@@ -143,57 +172,39 @@ export const AuditLogsPage: React.FC<AuditLogsPageProps> = ({
                     </div>
 
                     <div className="overflow-x-auto">
-                        <table className="w-full text-sm text-left text-muted-foreground">
-                            <thead className="text-xs uppercase bg-muted/50">
+                        <table className="w-full text-left">
+                            <thead className="bg-slate-800/50 text-xs text-slate-400 uppercase tracking-wider">
                                 <tr>
-                                    <th scope="col" className="px-6 py-3">Timestamp</th>
-                                    <th scope="col" className="px-6 py-3">User</th>
-                                    <th scope="col" className="px-6 py-3">Action</th>
-                                    <th scope="col" className="px-6 py-3">Details</th>
-                                    <th scope="col" className="px-6 py-3">Related Alert</th>
+                                    <th scope="col" className="px-6 py-3 font-semibold">Timestamp</th>
+                                    <th scope="col" className="px-6 py-3 font-semibold">User</th>
+                                    <th scope="col" className="px-6 py-3 font-semibold">Action</th>
+                                    <th scope="col" className="px-6 py-3 font-semibold">Details</th>
+                                    <th scope="col" className="px-6 py-3 font-semibold">Related Alert</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                {filteredLogs.map(log => {
-                                    const notification = getNotificationById(log.notification_id);
-                                    const { icon, color } = getActionStyling(log.action);
-                                    const userName = log.user_id === 'System' ? 'System' : userNames.get(log.user_id) || 'Unknown User';
-
-                                    return (
-                                    <tr key={log.id} className="bg-card border-b hover:bg-muted/50">
-                                        <td className="px-6 py-4 whitespace-nowrap">{new Date(log.timestamp).toLocaleString()}</td>
-                                        <td className="px-6 py-4 font-medium text-foreground">{userName}</td>
-                                        <td className="px-6 py-4">
-                                            <span className={`flex items-center gap-2 font-medium ${color}`}>
-                                                <Icon name={icon as any} className={`w-4 h-4`} />
-                                                {log.action}
-                                            </span>
-                                        </td>
-                                        <td className="px-6 py-4 max-w-sm truncate">{log.details}</td>
-                                        <td className="px-6 py-4">
-                                            {notification ? (
-                                                <span className={`px-2 py-1 text-xs font-medium rounded-full bg-muted text-muted-foreground`}>
-                                                    {notification.title}
-                                                </span>
-                                            ) : 'N/A'}
-                                        </td>
-                                    </tr>
-                                    );
-                                })}
+                                {filteredLogs.map(log => (
+                                    <AuditLogRow 
+                                        key={log.id} 
+                                        log={log} 
+                                        userName={log.user_id === 'System' ? 'System' : userNames.get(log.user_id) || 'Unknown User'}
+                                        notificationTitle={getNotificationById(log.notification_id)?.title}
+                                    />
+                                ))}
                             </tbody>
                         </table>
                     </div>
 
                     {filteredLogs.length === 0 && (
-                        <div className="text-center py-16 text-muted-foreground">
-                            <Icon name="file-text" className="w-12 h-12 mx-auto mb-2" />
-                            <p className="font-semibold">No audit logs found.</p>
-                            <p className="text-sm mt-1">Try adjusting your search or filter.</p>
+                        <div className="text-center py-20 text-slate-500">
+                            <Icon name="file-text" className="w-12 h-12 mx-auto mb-4" />
+                            <p className="font-semibold text-lg text-slate-400">No Audit Logs Found</p>
+                            <p className="text-sm mt-2">Try adjusting your search or time filter.</p>
                         </div>
                     )}
                 </div>
             </div>
         </main>
-    </>
+    </div>
   );
 };

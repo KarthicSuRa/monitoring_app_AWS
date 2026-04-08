@@ -259,7 +259,8 @@ export class InfrastructureStack extends cdk.Stack {
       environment: {
         ...commonLambdaProps.environment,
         SNS_TOPIC_ARN: pushNotificationTopic.topicArn,
-        WEBSOCKET_API_ENDPOINT: webSocketMgmtUrl, 
+        WEBSOCKET_API_ENDPOINT: webSocketMgmtUrl,
+        SNS_PLATFORM_APPLICATION_ARN: fcmPlatformApplicationArn,
       },
     });
     pushNotificationTopic.grantPublish(notificationLambda);
@@ -268,6 +269,12 @@ export class InfrastructureStack extends cdk.Stack {
         actions: ['execute-api:ManageConnections'],
         resources: [`arn:aws:execute-api:${this.region}:${this.account}:${webSocketApi.apiId}/*`],
     }));
+    // Grant permission to publish to any endpoint in the FCM platform application
+    notificationLambda.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['sns:Publish'],
+      resources: [fcmPlatformApplicationArn], 
+    }));
+
 
     // ─── Checker Lambda ───────────────────────────────────────────────────
     const checkerLambda = new lambda.Function(this, 'McmCheckerLambda', {
@@ -353,7 +360,7 @@ export class InfrastructureStack extends cdk.Stack {
       ],
       resources: [
         fcmPlatformApplicationArn,
-        `${fcmPlatformApplicationArn}/endpoint/*`,
+        `${fcmPlatformApplicationArn.replace(':app/', ':endpoint/')}/*`,
         pushNotificationTopic.topicArn,
       ],
     }));
@@ -380,7 +387,7 @@ export class InfrastructureStack extends cdk.Stack {
       ],
       resources: [
         fcmPlatformApplicationArn,
-        `${fcmPlatformApplicationArn}/endpoint/*`,
+        `${fcmPlatformApplicationArn.replace(':app/', ':endpoint/')}/*`,
         pushNotificationTopic.topicArn,
       ],
     }));

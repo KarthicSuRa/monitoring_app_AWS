@@ -24,7 +24,6 @@ import IntegrationPage from './pages/IntegrationPage';
 import { SettingsModal } from './components/layout/SettingsModal';
 import { NotificationToast } from './components/ui/NotificationToast';
 import { Theme, type Notification, SystemStatusData, NotificationUpdatePayload, Topic, MonitoredSite, User, Comment, Severity } from './types';
-import { PushNotificationService } from './lib/pushNotificationService';
 import { ThemeContext } from './contexts/ThemeContext';
 import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import { SiteDetailPage } from './pages/monitoring/SiteDetailPage';
@@ -34,6 +33,8 @@ import SyntheticMonitoringPage from './pages/monitoring/SyntheticMonitoringPage'
 import ErrorBoundary from './components/ui/ErrorBoundary';
 import { getCurrentUser, signOut } from './lib/cognitoClient';
 import { CognitoUserSession } from 'amazon-cognito-identity-js';
+import { onMessage } from 'firebase/messaging';
+import { messaging } from './lib/firebase'; // Ensure you export 'messaging' from your firebase.ts
 import { 
   getNotifications, 
   getTopics, 
@@ -46,6 +47,7 @@ import {
   sendTestAlert as apiSendTestAlert,
   connectWebSocket
 } from './lib/api';
+import { requestForToken, onMessageListener } from './lib/firebase';
 
 function App() {
   const [theme, setTheme] = useState<Theme>('light');
@@ -122,22 +124,24 @@ function App() {
   }), [isPushEnabled]);
 
   const handleNewNotification = useCallback((notification: Notification) => {
-      console.log('🔔 Handling new notification:', notification.title);
-      if (notifications.some(n => n.id === notification.id)) {
-        return;
-      }
-      setNotifications(prev => [notification, ...prev]);
-      addToast(notification);
-  
-      if (soundEnabled) {
-        try {
-          const audio = new Audio('/alert.wav');
-          audio.play().catch(e => console.error("Audio play failed:", e));
-        } catch (error: any) {
-          console.error("Error playing sound:", error);
+    console.log('🔔 Handling new notification:', notification.title);
+    setNotifications(prev => {
+        if (prev.some(n => n.id === notification.id)) {
+            return prev;
         }
+        return [notification, ...prev];
+    });
+    addToast(notification);
+
+    if (soundEnabled) {
+      try {
+        const audio = new Audio('/alert.wav');
+        audio.play().catch(e => console.error("Audio play failed:", e));
+      } catch (error: any) {
+        console.error("Error playing sound:", error);
       }
-    }, [soundEnabled, addToast, notifications]);
+    }
+  }, [soundEnabled, addToast]);
 
     notificationHandlerRef.current = handleNewNotification;
 
@@ -221,6 +225,65 @@ function App() {
   useEffect(() => {
     checkSession();
   }, [checkSession]);
+
+  useEffect(() => {
+    if (!profile) {
+      return;
+    }
+
+    setIsPushLoading(true);
+    let unsubscribeFromOnMessage: (() => void) | undefined;
+
+    const setupPushNotifications = async () => {
+      if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+        console.warn('Push messaging is not supported');
+        setIsPushEnabled(false);
+        setIsPushLoading(false);
+        return;
+      }
+
+      try {
+        const registration = await navigator.serviceWorker.register('/firebase-messaging-sw.js');
+        console.log('SW registration successful');
+        
+        const token = await requestForToken(registration);
+        setIsPushEnabled(!!token);
+
+        unsubscribeFromOnMessage = onMessage(messaging, (payload: any) => {
+          console.log('Received foreground message: ', payload);
+          const notification: Notification = {
+            id: payload.messageId || `fg-${Date.now()}`,
+            title: payload.notification?.title || payload.data?.title || 'Notification',
+            message: payload.notification?.body || payload.data?.message || '',
+            severity: (payload.data?.severity as Severity) || 'high',
+            type: 'push',
+            timestamp: new Date().toISOString(),
+            site: null,
+            comments: [],
+            topic_id: payload.data?.topic_id || null,
+            status: 'new',
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          };
+          handleNewNotification(notification);
+        });
+
+      } catch (err) {
+        console.error('An error occurred while setting up push notifications. ', err);
+        setIsPushEnabled(false);
+      } finally {
+        setIsPushLoading(false);
+      }
+    };
+
+    setupPushNotifications();
+
+    return () => {
+      if (unsubscribeFromOnMessage) {
+        unsubscribeFromOnMessage();
+      }
+    };
+  }, [profile, handleNewNotification]);
   
   const handleLoginSuccess = useCallback(async () => {
       setAuthLoading(true);
@@ -245,21 +308,6 @@ function App() {
         setAuthLoading(false);
       }
   }, [fetchInitialData, navigate]);
-
-  useEffect(() => {
-    const pushService = PushNotificationService.getInstance();
-    setIsPushLoading(true);
-    pushService.getSubscription()
-      .then(subscription => {
-        setIsPushEnabled(!!subscription);
-        setIsPushLoading(false);
-      })
-      .catch(error => {
-        console.error('Failed to check for push subscription:', error);
-        setIsPushEnabled(false);
-        setIsPushLoading(false);
-      });
-  }, []);
 
   useEffect(() => {
     if (theme === 'dark') {

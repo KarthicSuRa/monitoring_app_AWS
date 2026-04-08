@@ -1,7 +1,7 @@
 import React from 'react';
 import { Icon } from '../ui/Icon';
 import { Switch } from '../ui/Switch';
-import { PushNotificationService } from '../../lib/pushNotificationService';
+import { requestForToken } from '../../lib/firebase';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -16,13 +16,11 @@ interface SettingsModalProps {
   setIsPushLoading: (loading: boolean) => void;
 }
 
-// A simple, silent audio file encoded in Base64
 const silentAudio = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA';
 
-// This function plays a silent sound and must be called from a user-initiated event
 const unlockAudio = () => {
   const audio = new Audio(silentAudio);
-  audio.volume = 0.01; // As low as possible
+  audio.volume = 0.01;
   audio.play().catch(e => console.warn("Audio unlock failed:", e));
 };
 
@@ -38,7 +36,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   isPushLoading,
   setIsPushLoading,
 }) => {
-  const pushService = PushNotificationService.getInstance();
 
   if (!isOpen) return null;
 
@@ -66,15 +63,24 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setIsPushLoading(true);
     try {
       if (newCheckedState) {
-        await pushService.subscribe();
-        setIsPushEnabled(true);
+        if ('serviceWorker' in navigator) {
+          const registration = await navigator.serviceWorker.register('/firebase-messaging-sw.js');
+          const token = await requestForToken(registration);
+          if (token) {
+            setIsPushEnabled(true);
+          } else {
+            setIsPushEnabled(false);
+          }
+        } else {
+            console.error("Service workers are not supported.");
+            setIsPushEnabled(false);
+        }
       } else {
-        await pushService.unsubscribe();
+        console.warn("Unsubscribing is not supported in this version.");
         setIsPushEnabled(false);
       }
     } catch (error) {
       console.error("Error toggling push notifications", error);
-      // Revert the switch state on error
       setIsPushEnabled(!newCheckedState);
     } finally {
       setIsPushLoading(false);
@@ -84,7 +90,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   return (
     <div className="fixed inset-0 bg-gray-600 bg-opacity-75 flex justify-center items-center z-50" onClick={onClose}>
         <div className="bg-white rounded-xl shadow-2xl w-full max-w-md mx-4" onClick={e => e.stopPropagation()}>
-            {/* Modal Header */}
             <div className="px-6 py-5 border-b border-gray-200">
                 <div className="flex items-center justify-between">
                     <h2 className="text-xl font-bold text-gray-900">Application Settings</h2>
@@ -99,9 +104,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <p className="text-sm text-gray-500 mt-1">Manage your notification preferences.</p>
             </div>
 
-            {/* Modal Body */}
             <div className="p-6 space-y-6">
-                {/* Sound Settings */}
                 <div className="flex items-center justify-between">
                     <div>
                         <h3 className="font-semibold text-gray-800">Notification Sounds</h3>
@@ -113,7 +116,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     />
                 </div>
 
-                {/* Push Notifications */}
                 <div className="flex items-center justify-between">
                     <div>
                         <h3 className="font-semibold text-gray-800">Push Notifications</h3>
@@ -126,7 +128,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     />
                 </div>
 
-                {/* Snooze Notifications */}
                 <div>
                     <h3 className="font-semibold text-gray-800 mb-2">Snooze Alerts</h3>
                     <p className="text-sm text-gray-500 mb-3">Temporarily pause all incoming notification sounds and toasts.</p>
@@ -142,7 +143,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </div>
             </div>
 
-            {/* Modal Footer */}
             <div className="px-6 py-4 bg-gray-50 rounded-b-xl text-right">
                 <button 
                     onClick={onClose} 

@@ -1,12 +1,12 @@
-
 import React, { useState, useRef, useEffect } from 'react';
 
 interface DropdownProps {
   buttonText: string;
   items: { label: string; onClick: () => void; }[];
+  buttonClassName?: string;
 }
 
-export const Dropdown: React.FC<DropdownProps> = ({ buttonText, items }) => {
+export const Dropdown: React.FC<DropdownProps> = ({ buttonText, items, buttonClassName }) => {
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -25,7 +25,7 @@ export const Dropdown: React.FC<DropdownProps> = ({ buttonText, items }) => {
 
   return (
     <div className="relative" ref={dropdownRef}>
-      <button onClick={() => setIsOpen(!isOpen)} className="bg-gray-800 text-white px-4 py-2 rounded-md">
+      <button onClick={() => setIsOpen(!isOpen)} className={buttonClassName || "bg-gray-800 text-white px-4 py-2 rounded-md"}>
         {buttonText}
       </button>
       {isOpen && (
@@ -33,7 +33,7 @@ export const Dropdown: React.FC<DropdownProps> = ({ buttonText, items }) => {
           <ul className="py-1">
             {items.map((item, index) => (
               <li key={index}>
-                <a href="#" onClick={item.onClick} className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
+                <a href="#" onClick={(e) => {e.preventDefault(); item.onClick(); setIsOpen(false);}} className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
                   {item.label}
                 </a>
               </li>

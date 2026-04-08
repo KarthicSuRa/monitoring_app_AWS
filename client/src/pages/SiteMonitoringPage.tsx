@@ -44,10 +44,9 @@ const REGIONS: Record<string, { center: L.LatLngExpression; zoom: number; filter
     },
 };
 
-// Auto-refresh every 60 seconds so the table/map reflect the latest check result
+
 const AUTO_REFRESH_INTERVAL_MS = 60_000;
 
-// After triggering a manual check, the lambda needs ~20s; poll until status is fresh
 const POST_TRIGGER_POLL_INTERVAL_MS = 5_000;
 const POST_TRIGGER_MAX_POLLS = 10;
 
@@ -79,7 +78,6 @@ export const SiteMonitoringPage: React.FC<SiteMonitoringPageProps> = ({
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const autoRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // ─── Fetch Sites ──────────────────────────────────────────────────────────
   const fetchSites = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
     setError(null);
@@ -94,7 +92,6 @@ export const SiteMonitoringPage: React.FC<SiteMonitoringPageProps> = ({
     }
   }, []);
 
-  // ─── Initial load + auto-refresh every 60s ────────────────────────────────
   useEffect(() => {
     fetchSites();
 
@@ -107,7 +104,6 @@ export const SiteMonitoringPage: React.FC<SiteMonitoringPageProps> = ({
     };
   }, [fetchSites]);
 
-  // ─── Stop post-trigger polling ────────────────────────────────────────────
   const stopPollTimer = () => {
     if (pollTimerRef.current) {
       clearInterval(pollTimerRef.current);
@@ -116,7 +112,6 @@ export const SiteMonitoringPage: React.FC<SiteMonitoringPageProps> = ({
     pollCountRef.current = 0;
   };
 
-  // ─── Trigger Monitoring ───────────────────────────────────────────────────
   const handleTriggerMonitoring = async () => {
     if (isTriggering) return;
     setIsTriggering(true);
@@ -127,7 +122,6 @@ export const SiteMonitoringPage: React.FC<SiteMonitoringPageProps> = ({
       await triggerMonitoring();
       setTriggerStatus('Check running… refreshing data shortly');
 
-      // Poll for fresh data after the lambda completes
       pollCountRef.current = 0;
       pollTimerRef.current = setInterval(async () => {
         pollCountRef.current += 1;
@@ -147,7 +141,6 @@ export const SiteMonitoringPage: React.FC<SiteMonitoringPageProps> = ({
     }
   };
 
-  // ─── Send Test Alert ──────────────────────────────────────────────────────
   const handleSendTestAlert = async () => {
     if (isSendingTest) return;
     setIsSendingTest(true);
@@ -163,7 +156,6 @@ export const SiteMonitoringPage: React.FC<SiteMonitoringPageProps> = ({
     }
   };
 
-  // ─── Add / Delete site ────────────────────────────────────────────────────
   const handleAddSite = async (site: Omit<MonitoredSite, 'id' | 'created_at' | 'updated_at'>) => {
     try {
       await addSite(site);
@@ -183,7 +175,6 @@ export const SiteMonitoringPage: React.FC<SiteMonitoringPageProps> = ({
     }
   };
 
-  // ─── Derived data ─────────────────────────────────────────────────────────
   const { filteredSites, mapCenter, mapZoom } = useMemo(() => {
     const safeSites = Array.isArray(sites) ? sites : [];
     const region = REGIONS[activeTab] || REGIONS.Global;
@@ -201,7 +192,6 @@ export const SiteMonitoringPage: React.FC<SiteMonitoringPageProps> = ({
     return safeSites.filter(region.filter).length;
   };
 
-  // Summary stats
   const totalSites = sites.length;
   const onlineSites = sites.filter(s => s.status === 'online').length;
   const offlineSites = sites.filter(s => s.status === 'offline').length;
@@ -220,16 +210,15 @@ export const SiteMonitoringPage: React.FC<SiteMonitoringPageProps> = ({
         onNavigate={onNavigate}
         profile={user}
       />
-      <main className="flex-1 overflow-y-auto bg-background md:ml-72">
+      <main className="flex-1 overflow-y-auto bg-gray-900 md:ml-72">
         <div className="max-w-screen-2xl mx-auto p-4 sm:p-6 lg:p-8">
 
-          {/* ─── Page Header ───────────────────────────────────────────────── */}
           <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start mb-6 gap-4">
             <div>
               <Button onClick={() => onNavigate('dashboard')} className="mb-3">
                 &larr; Back to Dashboard
               </Button>
-              <p className="text-sm text-muted-foreground">
+              <p className="text-sm text-gray-400">
                 Real-time status and performance across all monitored sites.
               </p>
             </div>
@@ -255,9 +244,8 @@ export const SiteMonitoringPage: React.FC<SiteMonitoringPageProps> = ({
             </div>
           </div>
 
-          {/* ─── Status messages ───────────────────────────────────────────── */}
           {triggerStatus && (
-            <div className="mb-4 px-4 py-2 rounded-lg bg-blue-900/30 border border-blue-500/40 text-blue-300 text-sm flex items-center gap-2">
+            <div className="mb-4 px-4 py-2 rounded-lg bg-blue-900/50 border border-blue-500/60 text-blue-200 text-sm flex items-center gap-2">
               {isTriggering && <span className="animate-spin inline-block">⟳</span>}
               {triggerStatus}
             </div>
@@ -265,20 +253,19 @@ export const SiteMonitoringPage: React.FC<SiteMonitoringPageProps> = ({
           {testAlertStatus && (
             <div className={`mb-4 px-4 py-2 rounded-lg border text-sm ${
               testAlertStatus.startsWith('Error')
-                ? 'bg-red-900/30 border-red-500/40 text-red-300'
-                : 'bg-emerald-900/30 border-emerald-500/40 text-emerald-300'
+                ? 'bg-red-900/50 border-red-500/60 text-red-200'
+                : 'bg-green-900/50 border-green-500/60 text-green-200'
             }`}>
               {testAlertStatus}
             </div>
           )}
 
-          {/* ─── Stats Bar ─────────────────────────────────────────────────── */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
             {[
-              { label: 'Total Sites', value: totalSites, color: 'bg-slate-700/50 border-slate-600/50 text-slate-200', dot: 'bg-slate-400' },
-              { label: 'Online',      value: onlineSites,  color: 'bg-emerald-900/30 border-emerald-500/40 text-emerald-300', dot: 'bg-emerald-400' },
-              { label: 'Offline',     value: offlineSites, color: 'bg-red-900/30 border-red-500/40 text-red-300', dot: 'bg-red-500' },
-              { label: 'Unknown',     value: unknownSites, color: 'bg-amber-900/20 border-amber-500/30 text-amber-300', dot: 'bg-amber-400' },
+              { label: 'Total Sites', value: totalSites, color: 'bg-gray-800/60 border-gray-700/70 text-gray-200', dot: 'bg-gray-400' },
+              { label: 'Online',      value: onlineSites,  color: 'bg-green-900/50 border-green-500/60 text-green-200', dot: 'bg-green-400' },
+              { label: 'Offline',     value: offlineSites, color: 'bg-red-900/50 border-red-500/60 text-red-200', dot: 'bg-red-500' },
+              { label: 'Unknown',     value: unknownSites, color: 'bg-yellow-900/50 border-yellow-500/60 text-yellow-200', dot: 'bg-yellow-400' },
             ].map(({ label, value, color, dot }) => (
               <div key={label} className={`rounded-xl p-4 border backdrop-blur flex items-center gap-3 ${color}`}>
                 <div className={`w-3 h-3 rounded-full flex-shrink-0 ${dot}`} />
@@ -290,11 +277,9 @@ export const SiteMonitoringPage: React.FC<SiteMonitoringPageProps> = ({
             ))}
           </div>
 
-          {/* ─── Map + Table card ─────────────────────────────────────────── */}
-          <div className="bg-card border rounded-lg p-6">
+          <div className="bg-gray-800/60 border border-gray-700/70 rounded-lg p-6">
 
-            {/* Region tabs */}
-            <div className="border-b border-border mb-4">
+            <div className="border-b border-gray-700 mb-4">
               <nav className="-mb-px flex space-x-8 overflow-x-auto">
                 {Object.keys(REGIONS).map(region => (
                   <button
@@ -302,8 +287,8 @@ export const SiteMonitoringPage: React.FC<SiteMonitoringPageProps> = ({
                     onClick={() => setActiveTab(region)}
                     className={`whitespace-nowrap pb-4 px-1 border-b-2 font-medium text-sm ${
                       activeTab === region
-                        ? 'border-primary text-primary'
-                        : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
+                        ? 'border-blue-500 text-blue-400'
+                        : 'border-transparent text-gray-400 hover:text-white hover:border-gray-500'
                     }`}
                   >
                     {region} ({siteCount(region)})
@@ -319,13 +304,12 @@ export const SiteMonitoringPage: React.FC<SiteMonitoringPageProps> = ({
               </div>
             ) : (
               <>
-                {/* Map */}
                 <div className="h-[400px] rounded-lg overflow-hidden mb-6">
                   {loading ? (
                     <div className="flex items-center justify-center h-full">
                       <div className="text-center">
                         <div className="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-2" />
-                        <p className="text-slate-400 text-sm">Loading map…</p>
+                        <p className="text-gray-400 text-sm">Loading map…</p>
                       </div>
                     </div>
                   ) : (
@@ -339,12 +323,10 @@ export const SiteMonitoringPage: React.FC<SiteMonitoringPageProps> = ({
                   )}
                 </div>
 
-                {/* Last refreshed hint */}
-                <p className="text-xs text-muted-foreground mb-3">
+                <p className="text-xs text-gray-400 mb-3">
                   Auto-refreshes every 60s. Last loaded: {new Date().toLocaleTimeString()}
                 </p>
 
-                {/* Table */}
                 <SiteList
                   sites={filteredSites}
                   loading={loading}

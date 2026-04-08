@@ -5,6 +5,9 @@
  *
  * FIXED: SNS FCM v1 payload now uses the correct structure that AWS SNS
  * expects when Platform = GCM (FCM HTTP v1 API).
+ * FIXED: General notifications now fan-out to individual topic subscribers 
+ *        instead of using a broadcast SNS topic.
+ * FIXED: Use Promise.allSettled to prevent crash on partial push failures.
  */
 const { SNSClient, PublishCommand } = require('@aws-sdk/client-sns');
 const { ApiGatewayManagementApiClient, PostToConnectionCommand } = require('@aws-sdk/client-apigatewaymanagementapi');
@@ -65,11 +68,10 @@ const sendWebSocketNotification = async (notification, userId = null) => {
   } else {
     // Otherwise, get all subscribers for the notification's topic
     const topicSubscribers = await queryItems(TABLES.TOPIC_SUBSCRIPTIONS, {
-      IndexName: 'topic-id-index', // <-- FIXED: Use the correct GSI
+      IndexName: 'topic-id-index',
       KeyConditionExpression: 'topic_id = :tid',
       ExpressionAttributeValues: { ':tid': notification.topic_id },
     });
-    // Filter out any subscribers with a missing user_id to prevent errors
     userIds = topicSubscribers.map(s => s.user_id).filter(Boolean);
     console.log(`Found ${userIds.length} subscribers for topic ${notification.topic_id}`);
   }
@@ -79,7 +81,6 @@ const sendWebSocketNotification = async (notification, userId = null) => {
     return { status: 'No recipients' };
   }
 
-  // Get all active connections for these users
   const allConnections = (await Promise.all(
     userIds.map(uid => 
       queryItems(TABLES.WEBSOCKET_CONNECTIONS, { 
@@ -107,7 +108,6 @@ const sendWebSocketNotification = async (notification, userId = null) => {
         Data: message,
       }));
     } catch (e) {
-      // 410 Gone indicates a stale connection. It's safe to delete.
       if (e.statusCode === 410) {
         await deleteItem(TABLES.WEBSOCKET_CONNECTIONS, { connection_id });
       } else {
@@ -121,108 +121,97 @@ const sendWebSocketNotification = async (notification, userId = null) => {
   return { sent_to: allConnections.length };
 };
 
+const sendSnsPushToUser = async (notification, userId) => {
+  const subs = await queryItems(TABLES.PUSH_SUBSCRIPTIONS, {
+    KeyConditionExpression: 'user_id = :uid',
+    ExpressionAttributeValues: { ':uid': userId },
+  });
 
-// ─── FCM v1 via SNS (FIXED PAYLOAD) ──────────────────────────────────────
-/**
- * SNS publishes to a GCM (FCM) platform application.
- * The "GCM" key in the MessageStructure payload must contain a JSON string
- * whose top-level key is "message" following the FCM HTTP v1 API spec.
- * See: https://firebase.google.com/docs/reference/fcm/rest/v1/projects.messages/send
- */
-const sendSnsPush = async (notification) => {
-  const topicArn = process.env.SNS_TOPIC_ARN;
-  if (!topicArn) {
-    console.warn('SNS_TOPIC_ARN not set — skipping push notification.');
-    return null;
+  if (!subs || subs.length === 0) {
+    console.log(`No push subscriptions found for user ${userId}`);
+    return { status: 'No subscriptions' };
   }
 
   const appUrl = process.env.CLOUDFRONT_URL || 'http://localhost:3000';
 
-  // FCM HTTP v1 message object (correct structure)
   const fcmMessage = {
-    message: {
+    notification: {
+      title: notification.title,
+      body: notification.message || '',
+    },
+    data: {
+      notificationId: notification.id,
+      severity: notification.severity || 'medium',
+      type: notification.type || 'general',
+      topic_id: notification.topic_id || '',
+      status: notification.status || 'new',
+      created_at: notification.created_at || now(),
+      click_action: appUrl,
+    },
+    webpush: {
       notification: {
-        title: notification.title,
-        body: notification.message || '',
+        icon: `${appUrl}/mcm-logo.png`,
+        badge: `${appUrl}/badge-icon.png`,
+        tag: notification.id,
+        renotify: true,
       },
-      data: {
-        notificationId: notification.id,
-        severity: notification.severity || 'medium',
-        type: notification.type || 'general',
-        topic_id: notification.topic_id || '',
-        status: notification.status || 'new',
-        created_at: notification.created_at || now(),
-        click_action: appUrl,
-      },
-      webpush: {
-        notification: {
-          icon: `${appUrl}/mcm-logo.png`,
-          badge: `${appUrl}/badge-icon.png`,
-          tag: notification.id, // replaces older notification with same tag
-          renotify: true,
-        },
-        fcm_options: {
-          link: appUrl,
-        },
-      },
-      android: {
-        priority: notification.severity === 'high' ? 'high' : 'normal',
-        notification: {
-          sound: 'default',
-          channel_id: 'mcm_alerts',
-        },
-      },
-      apns: {
-        payload: {
-          aps: {
-            sound: 'default',
-            badge: 1,
-          },
-        },
+      fcm_options: {
+        link: appUrl,
       },
     },
   };
 
   const snsPayload = {
     default: `MCM Alert: ${notification.title}`,
-    GCM: JSON.stringify(fcmMessage),   // ← FIXED: correct FCM v1 structure
+    GCM: JSON.stringify(fcmMessage),
   };
 
-  try {
-    const result = await snsClient.send(new PublishCommand({
-      TopicArn: topicArn,
+  const publishPromises = subs.map(sub => {
+    return snsClient.send(new PublishCommand({
+      TargetArn: sub.endpoint_arn,
       Message: JSON.stringify(snsPayload),
       MessageStructure: 'json',
       Subject: notification.title,
     }));
-    console.log('FCM push sent via SNS:', result.MessageId);
-    return { messageId: result.MessageId };
-  } catch (err) {
-    console.error('SNS push failed:', err.message, err.code);
-    return { error: err.message };
-  }
+  });
+
+  // Use Promise.allSettled to handle both successful and failed promises
+  const outcomes = await Promise.allSettled(publishPromises);
+
+  const results = outcomes.map((outcome, index) => {
+    const sub = subs[index];
+    if (outcome.status === 'fulfilled') {
+      console.log(`Successfully sent push to ${sub.endpoint_arn}`);
+      return { endpoint: sub.endpoint_arn, messageId: outcome.value.MessageId, status: 'success' };
+    } else {
+      console.error(`SNS push to user ${userId} endpoint ${sub.endpoint_arn} failed:`, outcome.reason.message);
+      return { endpoint: sub.endpoint_arn, error: outcome.reason.message, status: 'failed' };
+    }
+  });
+
+  console.log(`Completed push notification attempts for user ${userId}`);
+  return results;
 };
+
 
 // ─── NOTIFICATION HANDLERS ────────────────────────────────────────────────
 
 async function handleNotifications(method, path, body, user, cors) {
   const pathParts = path.split('/').filter(p => p && p !== 'prod');
-  const base = pathParts[0]; // 'notifications'
-  const second = pathParts[1]; // id, 'test', or undefined
-  const third = pathParts[2]; // 'comments' or undefined
+  const base = pathParts[0];
+  const second = pathParts[1];
+  const third = pathParts[2];
 
   const isTest = second === 'test';
   const notificationId = second && !isTest ? second : null;
   const isComments = third === 'comments';
 
-  // ── POST /notifications (public webhook endpoint) ─────────────────────
   if (method === 'POST' && !second) {
     const { topic_id, topic_name, title, message, severity, type, metadata } = body;
     if (!title || !severity)
       return json(400, { error: 'title and severity are required' }, cors);
 
     let finalTopicId = topic_id || null;
-    // If a topic_name is provided, find or create the topic
     if (topic_name && !finalTopicId) {
       const topicItems = await queryItems(TABLES.TOPICS, {
         IndexName: 'name-index',
@@ -234,7 +223,6 @@ async function handleNotifications(method, path, body, user, cors) {
       if (topicItems.length > 0) {
         finalTopicId = topicItems[0].id;
       } else {
-        // Topic not found, create it
         finalTopicId = newId();
         await putItem(TABLES.TOPICS, {
           id: finalTopicId,
@@ -245,7 +233,6 @@ async function handleNotifications(method, path, body, user, cors) {
       }
     }
 
-    // If no topic_id could be determined, use/create a "General" topic
     if (!finalTopicId) {
       const generalTopicName = 'General';
       const topicItems = await queryItems(TABLES.TOPICS, {
@@ -258,7 +245,6 @@ async function handleNotifications(method, path, body, user, cors) {
       if (topicItems.length > 0) {
         finalTopicId = topicItems[0].id;
       } else {
-        // "General" topic not found, create it
         finalTopicId = newId();
         await putItem(TABLES.TOPICS, {
           id: finalTopicId,
@@ -284,17 +270,32 @@ async function handleNotifications(method, path, body, user, cors) {
     };
     await putItem(TABLES.NOTIFICATIONS, item);
 
-    // Fan out to both push and websocket
-    const pushResult = await sendSnsPush(item);
-    const wsResult = await sendWebSocketNotification(item);
+    // CORRECTED LOGIC: Fan-out notifications to all topic subscribers
+    const topicSubscribers = await queryItems(TABLES.TOPIC_SUBSCRIPTIONS, {
+      IndexName: 'topic-id-index',
+      KeyConditionExpression: 'topic_id = :tid',
+      ExpressionAttributeValues: { ':tid': item.topic_id },
+    });
+    const userIds = [...new Set(topicSubscribers.map(s => s.user_id).filter(Boolean))];
 
-    return json(201, { ...item, push_notification: pushResult, websocket_notification: wsResult }, cors);
+    console.log(`Notification ${item.id} for topic ${item.topic_id} has ${userIds.length} unique user subscribers. Sending notifications.`);
+
+    // Send push and WebSocket notifications
+    const pushTask = Promise.all(userIds.map(uid => sendSnsPushToUser(item, uid)));
+    const wsTask = sendWebSocketNotification(item);
+    
+    const [pushResults, wsResult] = await Promise.all([pushTask, wsTask]);
+
+    const aggregatedPushResult = {
+      sent_to_users: userIds,
+      results: pushResults.flat(),
+    };
+
+    return json(201, { ...item, push_notification: aggregatedPushResult, websocket_notification: wsResult }, cors);
   }
 
-  // Auth required below
   if (!user) return json(401, { error: 'Unauthorized' }, cors);
 
-  // ── POST /notifications/test ──────────────────────────────────────────
   if (method === 'POST' && isTest) {
     const ts = now();
     const item = {
@@ -313,12 +314,11 @@ async function handleNotifications(method, path, body, user, cors) {
     await putItem(TABLES.NOTIFICATIONS, item);
     
     const wsResult = await sendWebSocketNotification(item, user.id);
-    const pushResult = await sendSnsPush(item);
+    const pushResult = await sendSnsPushToUser(item, user.id);
 
     return json(201, { ...item, websocket_notification: wsResult, push_notification: pushResult }, cors);
   }
 
-  // ── POST /notifications/:id/comments ─────────────────────────────────
   if (notificationId && isComments && method === 'POST') {
     const { text } = body;
     if (!text || !text.trim()) return json(400, { error: 'Comment text required' }, cors);
@@ -334,7 +334,6 @@ async function handleNotifications(method, path, body, user, cors) {
     return json(201, item, cors);
   }
 
-  // ── GET /notifications/:id ────────────────────────────────────────────
   if (notificationId && method === 'GET') {
     const notif = await getItem(TABLES.NOTIFICATIONS, { id: notificationId });
     if (!notif) return json(404, { error: 'Notification not found' }, cors);
@@ -348,7 +347,6 @@ async function handleNotifications(method, path, body, user, cors) {
     return json(200, notif, cors);
   }
 
-  // ── PUT /notifications/:id ────────────────────────────────────────────
   if (notificationId && method === 'PUT') {
     const { status } = body;
     const valid = ['new', 'acknowledged', 'resolved'];
@@ -363,9 +361,7 @@ async function handleNotifications(method, path, body, user, cors) {
     return json(200, updated, cors);
   }
 
-  // ── GET /notifications (list all) ─────────────────────────────────────
   if (method === 'GET') {
-    // Query using status-created-index for each status, merge and sort
     const statuses = ['new', 'acknowledged', 'resolved'];
     const allItems = (await Promise.all(statuses.map(s =>
       queryItems(TABLES.NOTIFICATIONS, {
@@ -381,7 +377,6 @@ async function handleNotifications(method, path, body, user, cors) {
     allItems.sort((a, b) => b.created_at.localeCompare(a.created_at));
     const top200 = allItems.slice(0, 200);
 
-    // Batch-fetch comments for all notifications
     const enriched = await Promise.all(top200.map(async (n) => {
       const comments = await queryItems(TABLES.COMMENTS, {
         KeyConditionExpression: 'notification_id = :nid',
@@ -408,7 +403,6 @@ exports.handler = async (event) => {
   const path = event.path.replace(/^\/prod/, '');
   const method = event.httpMethod;
 
-  // Public endpoints
   const isPublic = method === 'POST' && path === '/notifications';
 
   let user = null;
@@ -416,7 +410,6 @@ exports.handler = async (event) => {
     const claims = event.requestContext?.authorizer?.claims;
     if (!claims) return json(401, { error: 'Unauthorized' }, cors);
     user = { id: claims.sub, email: claims.email, app_role: claims['custom:app_role'] || 'member' };
-    // Upsert user
     const existing = await getItem(TABLES.USERS, { id: user.id });
     if (!existing) {
       await putItem(TABLES.USERS, { id: user.id, email: user.email, app_role: user.app_role, created_at: now(), updated_at: now() });

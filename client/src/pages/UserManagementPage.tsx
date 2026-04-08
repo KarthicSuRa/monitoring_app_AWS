@@ -3,8 +3,7 @@ import * as api from '../lib/api';
 import { User, SystemStatusData, Notification, Team, Topic } from '../types';
 import { Header } from '../components/layout/Header';
 
-// ─── Types ────────────────────────────────────────────────────────────────
-
+// ─── Types ──────────────────────────────────────────────────────────────────
 interface TeamWithMembers extends Team {
   members: User[];
 }
@@ -22,7 +21,7 @@ interface UserManagementPageProps {
   onUpdateTopicTeam: (topicId: string, teamId: string | null) => Promise<void>;
 }
 
-// ─── Avatar initials helper ───────────────────────────────────────────────
+// ─── UI Helper Components ───────────────────────────────────────────────────
 
 const getInitials = (name: string, email: string) => {
   if (name) {
@@ -35,76 +34,240 @@ const getInitials = (name: string, email: string) => {
 };
 
 const AVATAR_COLORS = [
-  'from-blue-500 to-blue-600',
-  'from-violet-500 to-violet-600',
-  'from-emerald-500 to-emerald-600',
-  'from-amber-500 to-amber-600',
-  'from-rose-500 to-rose-600',
-  'from-cyan-500 to-cyan-600',
+  'from-blue-500 to-cyan-400',
+  'from-violet-500 to-fuchsia-400',
+  'from-emerald-500 to-lime-400',
+  'from-amber-500 to-yellow-400',
+  'from-rose-500 to-red-400',
 ];
 
-const avatarColor = (id: string) =>
-  AVATAR_COLORS[id.charCodeAt(0) % AVATAR_COLORS.length];
+const avatarColor = (id: string) => AVATAR_COLORS[id.charCodeAt(0) % AVATAR_COLORS.length];
 
-// ─── Role Badge ───────────────────────────────────────────────────────────
+const Avatar: React.FC<{ user: { id: string; full_name?: string | null; email?: string | null }, size?: 'sm' | 'md' }> = ({ user, size = 'md' }) => {
+  const sizeClasses = {
+    sm: 'w-8 h-8 text-xs',
+    md: 'w-10 h-10 text-sm',
+  };
+  return (
+    <div className={`rounded-full bg-gradient-to-br ${avatarColor(user.id)} flex-shrink-0 flex items-center justify-center font-bold text-white ${sizeClasses[size]}`}>
+      {getInitials(user.full_name || '', user.email || '')}
+    </div>
+  );
+};
 
 const RoleBadge: React.FC<{ role: string }> = ({ role }) => {
   const styles: Record<string, string> = {
     super_admin: 'bg-violet-500/15 text-violet-300 border-violet-500/30',
-    admin:       'bg-blue-500/15 text-blue-300 border-blue-500/30',
-    member:      'bg-slate-700/50 text-slate-400 border-slate-600/50',
+    admin: 'bg-blue-500/15 text-blue-300 border-blue-500/30',
+    member: 'bg-slate-700/50 text-slate-400 border-slate-600/50',
   };
-  const cls = styles[role] || styles.member;
+  const roleName: Record<string, string> = {
+    super_admin: 'Super Admin',
+    admin: 'Admin',
+    member: 'Member',
+  };
   return (
-    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${cls}`}>
-      {role === 'super_admin' ? 'Super Admin' : role.charAt(0).toUpperCase() + role.slice(1)}
+    <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold border ${styles[role] || styles.member}`}>
+      {roleName[role] || 'Member'}
     </span>
   );
 };
 
-// ─── Modal wrapper ────────────────────────────────────────────────────────
-
-const Modal: React.FC<{ title: string; onClose: () => void; children: React.ReactNode; wide?: boolean }> = ({
-  title, onClose, children, wide,
-}) => (
-  <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-    <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
-    <div className={`relative z-10 bg-slate-900 border border-slate-700/60 rounded-2xl shadow-2xl w-full ${wide ? 'max-w-3xl' : 'max-w-md'} max-h-[90vh] flex flex-col`}>
-      {/* Header */}
-      <div className="flex items-center justify-between px-6 py-4 border-b border-slate-700/50">
-        <h2 className="text-base font-semibold text-white">{title}</h2>
-        <button
-          onClick={onClose}
-          className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-500 hover:text-slate-300 hover:bg-slate-800 transition-all text-lg leading-none"
-        >
-          ×
-        </button>
-      </div>
-      <div className="overflow-y-auto px-6 py-5">
-        {children}
-      </div>
-    </div>
+const Card: React.FC<{ children: React.ReactNode, className?: string, padding?: boolean }> = ({ children, className = '', padding = true }) => (
+  <div className={`bg-slate-900/70 backdrop-blur border border-slate-800 rounded-xl ${className}`}>
+    {padding ? <div className="p-5">{children}</div> : children}
   </div>
 );
 
-// ─── Main Page ────────────────────────────────────────────────────────────
+const Modal: React.FC<{ title: string; onClose: () => void; children: React.ReactNode; wide?: boolean }> = ({ title, onClose, children, wide }) => (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
+        <div className={`relative z-10 bg-slate-900 border border-slate-800 rounded-xl shadow-2xl w-full ${wide ? 'max-w-3xl' : 'max-w-lg'} max-h-[90vh] flex flex-col`}>
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800">
+                <h2 className="text-lg font-bold text-white">{title}</h2>
+                <button onClick={onClose} className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-white hover:bg-slate-800 transition-colors">
+                    &times;
+                </button>
+            </div>
+            <div className="overflow-y-auto p-6">{children}</div>
+        </div>
+    </div>
+);
 
-const UserManagementPage: React.FC<UserManagementPageProps> = ({
-  user, topics, onLogout, isSidebarOpen, setIsSidebarOpen,
-  notifications, openSettings, systemStatus, onNavigate, onUpdateTopicTeam,
-}) => {
+
+// ─── Page Section Components ────────────────────────────────────────────────
+
+const UserListItem: React.FC<{ user: User; onEdit: () => void }> = ({ user, onEdit }) => (
+    <div className="flex items-center gap-4 px-4 py-3 hover:bg-slate-800/50 transition-colors">
+        <Avatar user={user} />
+        <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-white truncate">{user.full_name || 'Unnamed User'}</p>
+            <p className="text-sm text-slate-400 truncate">{user.email}</p>
+        </div>
+        <div className="hidden md:block">
+            <RoleBadge role={user.app_role || 'member'} />
+        </div>
+        <button onClick={onEdit} className="px-4 py-2 bg-slate-700/50 hover:bg-slate-700 border border-slate-600 rounded-lg text-xs font-semibold text-slate-300 transition-all">
+            Edit
+        </button>
+    </div>
+);
+
+const TeamListItem: React.FC<{ team: TeamWithMembers; onManage: () => void }> = ({ team, onManage }) => (
+    <div className="flex items-center justify-between gap-4 px-4 py-4 hover:bg-slate-800/50 transition-colors">
+        <div className="flex items-center gap-4">
+            <div className="w-10 h-10 rounded-lg bg-violet-500/10 flex items-center justify-center text-violet-400">
+                <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.653-.084-1.282-.237-1.887M7 12H3v-2a3 3 0 016 0v2M7 12h10" /></svg>
+            </div>
+            <div>
+                <p className="text-sm font-semibold text-white">{team.name}</p>
+                <p className="text-sm text-slate-400">{team.members.length} member{team.members.length !== 1 ? 's' : ''}</p>
+            </div>
+        </div>
+        <button onClick={onManage} className="px-4 py-2 bg-slate-700/50 hover:bg-slate-700 border border-slate-600 rounded-lg text-xs font-semibold text-slate-300 transition-all">
+            Manage
+        </button>
+    </div>
+);
+
+// ─── Modal Content Components ─────────────────────────────────────────────
+
+const EditUserContent: React.FC<{
+    user: User;
+    editedFields: { full_name: string; app_role: string };
+    setEditedFields: React.Dispatch<React.SetStateAction<{ full_name: string; app_role: string }>>;
+    onSave: () => void;
+    onCancel: () => void;
+}> = ({ user, editedFields, setEditedFields, onSave, onCancel }) => (
+    <div className="space-y-6">
+        <div>
+            <label className="block text-sm font-medium text-slate-300 mb-2">Full Name</label>
+            <input
+                type="text"
+                value={editedFields.full_name}
+                onChange={e => setEditedFields({ ...editedFields, full_name: e.target.value })}
+                className="w-full bg-slate-800 border border-slate-700 focus:border-blue-500 rounded-lg px-4 py-2.5 text-white outline-none"
+                placeholder="Enter full name"
+            />
+        </div>
+        <div>
+            <label className="block text-sm font-medium text-slate-300 mb-2">Role</label>
+            <select
+                value={editedFields.app_role}
+                onChange={e => setEditedFields({ ...editedFields, app_role: e.target.value })}
+                className="w-full bg-slate-800 border border-slate-700 focus:border-blue-500 rounded-lg px-4 py-2.5 text-white outline-none appearance-none"
+            >
+                <option value="member">Member</option>
+                <option value="admin">Admin</option>
+                <option value="super_admin">Super Admin</option>
+            </select>
+        </div>
+        <div className="flex gap-4 mt-6 pt-6 border-t border-slate-800">
+            <button onClick={onSave} className="flex-1 bg-blue-600 hover:bg-blue-500 text-white font-semibold py-2.5 px-4 rounded-lg transition-all">
+                Save Changes
+            </button>
+            <button onClick={onCancel} className="px-4 py-2.5 bg-slate-700/60 hover:bg-slate-700 text-slate-300 rounded-lg transition-all">
+                Cancel
+            </button>
+        </div>
+    </div>
+);
+
+
+const ManageTeamContent: React.FC<{
+    team: TeamWithMembers;
+    allUsers: User[];
+    topics: Topic[];
+    onAddMember: (userId: string) => void;
+    onRemoveMember: (userId: string) => void;
+    onUpdateTopicTeam: (topicId: string, teamId: string | null) => Promise<void>;
+}> = ({ team, allUsers, topics, onAddMember, onRemoveMember, onUpdateTopicTeam }) => {
+    const [userToAdd, setUserToAdd] = useState('');
+    const memberIds = useMemo(() => new Set(team.members.map(m => m.id)), [team.members]);
+    const usersNotInTeam = useMemo(() => allUsers.filter(u => !memberIds.has(u.id)), [allUsers, memberIds]);
+
+    return (
+        <div className="grid md:grid-cols-2 gap-8">
+            {/* Members Column */}
+            <div className="space-y-6">
+                <div>
+                    <h3 className="text-base font-semibold text-white mb-3">Add Member</h3>
+                    <div className="flex gap-2">
+                        <select value={userToAdd} onChange={e => setUserToAdd(e.target.value)} className="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white outline-none">
+                            <option value="">Select a user...</option>
+                            {usersNotInTeam.map(u => <option key={u.id} value={u.id}>{u.full_name || u.email}</option>)}
+                        </select>
+                        <button onClick={() => { onAddMember(userToAdd); setUserToAdd(''); }} disabled={!userToAdd} className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-semibold disabled:bg-slate-600 disabled:cursor-not-allowed">
+                            Add
+                        </button>
+                    </div>
+                </div>
+
+                <div>
+                    <h3 className="text-base font-semibold text-white mb-3">Members ({team.members.length})</h3>
+                    <div className="bg-slate-800/50 border border-slate-700/60 rounded-lg max-h-72 overflow-y-auto divide-y divide-slate-700/50">
+                        {team.members.length === 0 ? (
+                            <p className="text-slate-400 text-center py-8 text-sm">No members in this team yet.</p>
+                        ) : team.members.map(member => (
+                            <div key={member.id} className="flex items-center gap-3 px-4 py-3">
+                                <Avatar user={member} size="sm" />
+                                <div className="flex-1 min-w-0">
+                                    <p className="text-sm font-medium text-white truncate">{member.full_name}</p>
+                                    <p className="text-xs text-slate-400 truncate">{member.email}</p>
+                                </div>
+                                <button onClick={() => onRemoveMember(member.id)} className="text-sm text-red-400 hover:text-red-300 font-semibold">
+                                    Remove
+                                </button>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            </div>
+
+            {/* Topic Assignments Column */}
+            <div className="space-y-6">
+                 <h3 className="text-base font-semibold text-white mb-3">Topic Assignments</h3>
+                 <div className="bg-slate-800/50 border border-slate-700/60 rounded-lg max-h-[25rem] overflow-y-auto divide-y divide-slate-700/50">
+                     {topics.length === 0 ? (
+                         <p className="text-slate-400 text-center py-8 text-sm">No topics available.</p>
+                     ) : topics.map(topic => {
+                         const isAssigned = topic.team_id === team.id;
+                         return (
+                            <div key={topic.id} className="flex items-center justify-between gap-4 px-4 py-3">
+                                <div className="flex-1 min-w-0">
+                                    <p className="text-sm font-medium text-white truncate">{topic.name}</p>
+                                    <p className="text-xs text-slate-400 truncate">{topic.description || 'No description'}</p>
+                                </div>
+                                <label className="cursor-pointer">
+                                    <input type="checkbox" checked={isAssigned} onChange={() => onUpdateTopicTeam(topic.id, isAssigned ? null : team.id)} className="sr-only" />
+                                    <div className={`w-11 h-6 rounded-full transition-colors ${isAssigned ? 'bg-blue-600' : 'bg-slate-700'}`}>
+                                        <span className={`block w-4 h-4 m-1 bg-white rounded-full shadow transform transition-transform ${isAssigned ? 'translate-x-5' : ''}`} />
+                                    </div>
+                                </label>
+                            </div>
+                         );
+                    })}
+                 </div>
+            </div>
+        </div>
+    );
+};
+
+
+// ─── Main Page Component ────────────────────────────────────────────────────
+
+const UserManagementPage: React.FC<UserManagementPageProps> = (props) => {
+  const { user, topics, onLogout, isSidebarOpen, setIsSidebarOpen, notifications, openSettings, systemStatus, onNavigate, onUpdateTopicTeam } = props;
+
   const [users, setUsers] = useState<User[]>([]);
   const [teams, setTeams] = useState<TeamWithMembers[]>([]);
   const [loading, setLoading] = useState(true);
   const [newTeamName, setNewTeamName] = useState('');
   const [managingTeam, setManagingTeam] = useState<TeamWithMembers | null>(null);
-  const [userToAdd, setUserToAdd] = useState('');
   const [editingUser, setEditingUser] = useState<User | null>(null);
-  const [editedFields, setEditedFields] = useState<{ full_name: string; app_role: string }>({ full_name: '', app_role: 'member' });
+  const [editedFields, setEditedFields] = useState({ full_name: '', app_role: 'member' });
   const [activeTab, setActiveTab] = useState<'users' | 'teams'>('users');
   const [searchQuery, setSearchQuery] = useState('');
-
-  useEffect(() => { if (user) fetchData(); }, [user]);
 
   const fetchData = async () => {
     setLoading(true);
@@ -116,11 +279,19 @@ const UserManagementPage: React.FC<UserManagementPageProps> = ({
     setLoading(false);
   };
 
+  useEffect(() => { if (user) fetchData(); }, [user]);
+
+  useEffect(() => {
+    if (managingTeam?.id) {
+      setManagingTeam(prev => teams.find(t => t.id === prev?.id) || null);
+    }
+  }, [teams, managingTeam?.id]);
+
   const createTeam = async () => {
     if (!newTeamName.trim()) return;
     try {
-      const t = await api.createTeam(newTeamName);
-      setTeams(prev => [...prev, t as TeamWithMembers]);
+      const newTeam = await api.createTeam(newTeamName);
+      setTeams(prev => [...prev, newTeam as TeamWithMembers]);
       setNewTeamName('');
     } catch (err) { alert(`Error creating team: ${err}`); }
   };
@@ -128,46 +299,32 @@ const UserManagementPage: React.FC<UserManagementPageProps> = ({
   const handleUpdateUser = async () => {
     if (!editingUser) return;
     try {
-      const updated = await api.updateUser(editingUser.id, { full_name: editedFields.full_name, app_role: editedFields.app_role });
+      const updated = await api.updateUser(editingUser.id, editedFields);
       setUsers(prev => prev.map(u => u.id === updated.id ? updated : u));
       setEditingUser(null);
     } catch (err) { alert(`Error updating user: ${err}`); }
   };
 
-  const addMemberToTeam = async () => {
-    if (!userToAdd || !managingTeam) return;
+  const addMemberToTeam = async (userId: string) => {
+    if (!userId || !managingTeam) return;
     try {
-      await api.addTeamMember(managingTeam.id, userToAdd, 'member');
-      await fetchData();
-      setUserToAdd('');
+      await api.addTeamMember(managingTeam.id, userId, 'member');
+      fetchData(); // Refetch to get updated team memberships
     } catch (err) { alert(`Error adding member: ${err}`); }
   };
-
-  useEffect(() => {
-    if (managingTeam?.id) {
-      const fresh = teams.find(t => t.id === managingTeam.id);
-      setManagingTeam(fresh || null);
-    }
-  }, [teams, managingTeam?.id]);
 
   const removeMemberFromTeam = async (userId: string) => {
     if (!managingTeam) return;
     try {
       await api.removeTeamMember(managingTeam.id, userId);
-      await fetchData();
+      fetchData(); // Refetch to get updated team memberships
     } catch (err) { alert(`Error removing member: ${err}`); }
   };
 
-  const usersNotInTeam = useMemo(() => {
-    if (!managingTeam) return users;
-    const ids = new Set(managingTeam.members.map(m => m.id));
-    return users.filter(u => !ids.has(u.id));
-  }, [users, managingTeam]);
-
-  const topicsForTeam = useMemo(() => {
-    if (!managingTeam) return [];
-    return topics.map(t => ({ ...t, isAssigned: t.team_id === managingTeam.id }));
-  }, [topics, managingTeam]);
+  const openEditModal = (userToEdit: User) => {
+    setEditingUser(userToEdit);
+    setEditedFields({ full_name: userToEdit.full_name || '', app_role: userToEdit.app_role || 'member' });
+  };
 
   const filteredUsers = useMemo(() =>
     users.filter(u =>
@@ -178,151 +335,60 @@ const UserManagementPage: React.FC<UserManagementPageProps> = ({
 
   return (
     <div className="flex flex-col h-screen bg-slate-950 md:ml-72">
-      <Header
-        onNavigate={onNavigate}
-        onLogout={onLogout}
-        notifications={notifications}
-        isSidebarOpen={isSidebarOpen}
-        setIsSidebarOpen={setIsSidebarOpen}
-        openSettings={openSettings}
-        systemStatus={systemStatus}
-        profile={user || null}
-        title="User & Team Management"
-      />
+      <Header {...props} profile={user} title="User & Team Management" />
 
-      <main className="flex-1 overflow-y-auto p-4 md:p-8">
+      <main className="flex-1 overflow-y-auto p-4 md:p-8 space-y-8">
         {loading ? (
-          <div className="flex items-center justify-center h-64">
-            <div className="text-center">
-              <div className="w-10 h-10 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
-              <p className="text-slate-500 text-sm">Loading…</p>
-            </div>
-          </div>
+            <div className="flex items-center justify-center h-full"><div className="w-10 h-10 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" /></div>
         ) : (
           <>
-            {/* Section intro */}
-            <div className="mb-6">
-              <p className="text-slate-400 text-sm">Manage users, roles, and team assignments for your organisation.</p>
+            <div>
+                <p className="text-slate-400">Manage users, roles, and team assignments for your organisation.</p>
             </div>
-
-            {/* Tab bar */}
-            <div className="flex gap-1 bg-slate-800/60 border border-slate-700/50 rounded-xl p-1 w-fit mb-6">
+            
+            <div className="flex gap-1 bg-slate-800/80 border border-slate-700/50 rounded-xl p-1 w-fit">
               {(['users', 'teams'] as const).map(tab => (
-                <button
-                  key={tab}
-                  onClick={() => setActiveTab(tab)}
-                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                    activeTab === tab
-                      ? 'bg-blue-600 text-white shadow'
-                      : 'text-slate-400 hover:text-white'
-                  }`}
-                >
-                  {tab === 'users' ? `👤 Users (${users.length})` : `👥 Teams (${teams.length})`}
+                <button key={tab} onClick={() => setActiveTab(tab)} className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${activeTab === tab ? 'bg-blue-600 text-white' : 'text-slate-300 hover:text-white'}`}>
+                  {tab === 'users' ? `Users (${users.length})` : `Teams (${teams.length})`}
                 </button>
               ))}
             </div>
 
-            {/* ── Users Tab ─────────────────────────────────────────────── */}
             {activeTab === 'users' && (
-              <div className="bg-slate-900/60 backdrop-blur border border-slate-700/50 rounded-2xl overflow-hidden">
-                {/* Toolbar */}
-                <div className="flex items-center justify-between gap-3 px-5 py-4 border-b border-slate-700/50">
-                  <h2 className="text-sm font-semibold text-white">All Users</h2>
-                  <input
-                    type="text"
-                    value={searchQuery}
-                    onChange={e => setSearchQuery(e.target.value)}
-                    placeholder="Search by name or email…"
-                    className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 w-56"
-                  />
+              <Card padding={false}>
+                <div className="flex items-center justify-between gap-4 px-4 py-3 border-b border-slate-800">
+                  <h2 className="text-base font-semibold text-white">All Users</h2>
+                  <input type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Search by name or email..." className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-white w-full max-w-xs" />
                 </div>
-
-                {/* User list */}
-                <div className="divide-y divide-slate-700/30">
+                <div className="divide-y divide-slate-800">
                   {filteredUsers.length === 0 ? (
-                    <p className="text-slate-500 text-sm text-center py-10">No users found</p>
-                  ) : filteredUsers.map(u => (
-                    <div key={u.id} className="flex items-center gap-4 px-5 py-3.5 hover:bg-slate-800/30 transition-colors">
-                      {/* Avatar */}
-                      <div className={`w-9 h-9 rounded-full bg-gradient-to-br ${avatarColor(u.id)} flex items-center justify-center text-white text-xs font-bold flex-shrink-0`}>
-                        {getInitials(u.full_name || '', u.email || '')}
-                      </div>
-                      {/* Info */}
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-white truncate">{u.full_name || 'Unnamed User'}</p>
-                        <p className="text-xs text-slate-500 truncate">{u.email}</p>
-                      </div>
-                      {/* Role */}
-                      <RoleBadge role={u.app_role || 'member'} />
-                      {/* Edit */}
-                      <button
-                        onClick={() => { setEditingUser(u); setEditedFields({ full_name: u.full_name || '', app_role: u.app_role || 'member' }); }}
-                        className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-600 rounded-lg text-xs text-slate-300 transition-all"
-                      >
-                        Edit
-                      </button>
-                    </div>
-                  ))}
+                    <p className="text-slate-400 text-center py-10">No users found.</p>
+                  ) : filteredUsers.map(u => <UserListItem key={u.id} user={u} onEdit={() => openEditModal(u)} />)}
                 </div>
-                {/* Footer */}
-                <div className="px-5 py-3 border-t border-slate-700/50 text-xs text-slate-600">
+                <div className="px-4 py-3 border-t border-slate-800 text-xs text-slate-500">
                   {filteredUsers.length} of {users.length} users
                 </div>
-              </div>
+              </Card>
             )}
 
-            {/* ── Teams Tab ─────────────────────────────────────────────── */}
             {activeTab === 'teams' && (
-              <div className="space-y-4">
-                {/* Create team */}
-                <div className="bg-slate-900/60 backdrop-blur border border-slate-700/50 rounded-2xl p-5">
-                  <h3 className="text-sm font-semibold text-white mb-3">Create New Team</h3>
-                  <div className="flex gap-3">
-                    <input
-                      type="text"
-                      value={newTeamName}
-                      onChange={e => setNewTeamName(e.target.value)}
-                      onKeyDown={e => e.key === 'Enter' && createTeam()}
-                      placeholder="Team name…"
-                      className="flex-1 bg-slate-800 border border-slate-700 focus:border-blue-500 rounded-lg px-4 py-2.5 text-sm text-white placeholder-slate-500 outline-none transition-all"
-                    />
-                    <button
-                      onClick={createTeam}
-                      className="px-5 py-2 bg-blue-600 hover:bg-blue-500 text-white font-medium rounded-lg text-sm transition-all"
-                    >
-                      Create
-                    </button>
-                  </div>
-                </div>
-
-                {/* Teams list */}
-                <div className="bg-slate-900/60 backdrop-blur border border-slate-700/50 rounded-2xl overflow-hidden">
-                  <div className="px-5 py-4 border-b border-slate-700/50">
-                    <h3 className="text-sm font-semibold text-white">All Teams ({teams.length})</h3>
-                  </div>
-                  <div className="divide-y divide-slate-700/30">
-                    {teams.length === 0 ? (
-                      <p className="text-slate-500 text-sm text-center py-10">No teams yet. Create one above.</p>
-                    ) : teams.map(team => (
-                      <div key={team.id} className="flex items-center justify-between gap-4 px-5 py-4 hover:bg-slate-800/30 transition-colors">
-                        <div className="flex items-center gap-3">
-                          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-violet-500/20 to-violet-600/10 border border-violet-500/20 flex items-center justify-center text-violet-400 text-base">
-                            👥
-                          </div>
-                          <div>
-                            <p className="text-sm font-semibold text-white">{team.name}</p>
-                            <p className="text-xs text-slate-500">{team.members.length} member{team.members.length !== 1 ? 's' : ''}</p>
-                          </div>
+              <div className="grid md:grid-cols-2 gap-8">
+                <div className="space-y-8">
+                    <Card>
+                        <h3 className="text-base font-semibold text-white mb-4">Create New Team</h3>
+                        <div className="flex gap-3">
+                            <input type="text" value={newTeamName} onChange={e => setNewTeamName(e.target.value)} onKeyDown={e => e.key === 'Enter' && createTeam()} placeholder="New team name..." className="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-4 py-2.5 text-white" />
+                            <button onClick={createTeam} className="px-5 py-2 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-lg">Create</button>
                         </div>
-                        <button
-                          onClick={() => setManagingTeam(team)}
-                          className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-600 rounded-lg text-xs text-slate-300 transition-all"
-                        >
-                          Manage →
-                        </button>
-                      </div>
-                    ))}
-                  </div>
+                    </Card>
+                     <Card padding={false}>
+                        <div className="px-4 py-3 border-b border-slate-800"><h3 className="text-base font-semibold text-white">All Teams ({teams.length})</h3></div>
+                        <div className="divide-y divide-slate-800">
+                            {teams.length === 0 ? (
+                                <p className="text-slate-400 text-center py-10">No teams created yet.</p>
+                            ) : teams.map(team => <TeamListItem key={team.id} team={team} onManage={() => setManagingTeam(team)} />)}
+                        </div>
+                    </Card>
                 </div>
               </div>
             )}
@@ -330,140 +396,15 @@ const UserManagementPage: React.FC<UserManagementPageProps> = ({
         )}
       </main>
 
-      {/* ── Edit User Modal ──────────────────────────────────────────────── */}
       {editingUser && (
-        <Modal title={`Edit User — ${editingUser.email}`} onClose={() => setEditingUser(null)}>
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-slate-300 mb-1.5">Full Name</label>
-              <input
-                type="text"
-                value={editedFields.full_name}
-                onChange={e => setEditedFields({ ...editedFields, full_name: e.target.value })}
-                className="w-full bg-slate-800 border border-slate-700 focus:border-blue-500 rounded-lg px-4 py-2.5 text-sm text-white outline-none transition-all"
-                placeholder="Enter full name"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-300 mb-1.5">Application Role</label>
-              <select
-                value={editedFields.app_role}
-                onChange={e => setEditedFields({ ...editedFields, app_role: e.target.value })}
-                className="w-full bg-slate-800 border border-slate-700 focus:border-blue-500 rounded-lg px-4 py-2.5 text-sm text-white outline-none transition-all"
-              >
-                <option value="member">Member</option>
-                <option value="admin">Admin</option>
-                <option value="super_admin">Super Admin</option>
-              </select>
-            </div>
-          </div>
-          <div className="flex gap-3 mt-6 pt-5 border-t border-slate-700/50">
-            <button
-              onClick={handleUpdateUser}
-              className="flex-1 bg-blue-600 hover:bg-blue-500 text-white font-medium py-2.5 px-4 rounded-lg text-sm transition-all"
-            >
-              Save Changes
-            </button>
-            <button
-              onClick={() => setEditingUser(null)}
-              className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 rounded-lg text-sm transition-all"
-            >
-              Cancel
-            </button>
-          </div>
+        <Modal title={`Edit User: ${editingUser.full_name || editingUser.email}`} onClose={() => setEditingUser(null)}>
+          <EditUserContent user={editingUser} editedFields={editedFields} setEditedFields={setEditedFields} onSave={handleUpdateUser} onCancel={() => setEditingUser(null)} />
         </Modal>
       )}
 
-      {/* ── Manage Team Modal ────────────────────────────────────────────── */}
       {managingTeam && (
-        <Modal title={`Manage Team — ${managingTeam.name}`} onClose={() => setManagingTeam(null)} wide>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* Members column */}
-            <div className="space-y-4">
-              {/* Add member */}
-              <div>
-                <label className="block text-sm font-medium text-slate-300 mb-2">Add Member</label>
-                <div className="flex gap-2">
-                  <select
-                    value={userToAdd}
-                    onChange={e => setUserToAdd(e.target.value)}
-                    className="flex-1 bg-slate-800 border border-slate-700 focus:border-blue-500 rounded-lg px-3 py-2 text-sm text-white outline-none transition-all"
-                  >
-                    <option value="">Select a user…</option>
-                    {usersNotInTeam.map(u => (
-                      <option key={u.id} value={u.id}>
-                        {u.full_name || u.email}
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    onClick={addMemberToTeam}
-                    className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-medium transition-all"
-                  >
-                    Add
-                  </button>
-                </div>
-              </div>
-
-              {/* Member list */}
-              <div>
-                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
-                  Members ({managingTeam.members.length})
-                </p>
-                <div className="bg-slate-800/60 border border-slate-700/50 rounded-xl overflow-hidden max-h-64 overflow-y-auto">
-                  {managingTeam.members.length === 0 ? (
-                    <p className="text-slate-500 text-xs text-center py-6">No members yet</p>
-                  ) : managingTeam.members.map(m => (
-                    <div key={m.id} className="flex items-center gap-3 px-4 py-3 border-b border-slate-700/30 last:border-0">
-                      <div className={`w-7 h-7 rounded-full bg-gradient-to-br ${avatarColor(m.id)} flex items-center justify-center text-white text-[10px] font-bold flex-shrink-0`}>
-                        {getInitials(m.full_name || '', m.email || '')}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-xs font-medium text-white truncate">{m.full_name || 'Unnamed'}</p>
-                        <p className="text-[10px] text-slate-500 truncate">{m.email}</p>
-                      </div>
-                      <button
-                        onClick={() => removeMemberFromTeam(m.id)}
-                        className="text-xs text-red-400 hover:text-red-300 font-medium transition-colors"
-                      >
-                        Remove
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            {/* Topic assignments column */}
-            <div>
-              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
-                Topic Assignments
-              </p>
-              <div className="bg-slate-800/60 border border-slate-700/50 rounded-xl overflow-hidden max-h-80 overflow-y-auto">
-                {topicsForTeam.length === 0 ? (
-                  <p className="text-slate-500 text-xs text-center py-6">No topics to assign</p>
-                ) : topicsForTeam.map(topic => (
-                  <label key={topic.id} className="flex items-center justify-between gap-3 px-4 py-3 border-b border-slate-700/30 last:border-0 cursor-pointer hover:bg-slate-700/30 transition-colors">
-                    <div className="min-w-0">
-                      <p className="text-xs font-medium text-white truncate">{topic.name}</p>
-                      <p className="text-[10px] text-slate-500 truncate">{topic.description || 'No description'}</p>
-                    </div>
-                    <div className="relative flex-shrink-0">
-                      <input
-                        type="checkbox"
-                        checked={topic.isAssigned}
-                        onChange={() => onUpdateTopicTeam(topic.id, topic.isAssigned ? null : managingTeam.id)}
-                        className="sr-only"
-                      />
-                      <div className={`w-10 h-6 rounded-full border transition-all ${topic.isAssigned ? 'bg-blue-600 border-blue-500' : 'bg-slate-700 border-slate-600'}`}>
-                        <div className={`w-4 h-4 bg-white rounded-full shadow transition-all mt-0.5 ${topic.isAssigned ? 'ml-5' : 'ml-0.5'}`} />
-                      </div>
-                    </div>
-                  </label>
-                ))}
-              </div>
-            </div>
-          </div>
+        <Modal title={`Manage Team: ${managingTeam.name}`} onClose={() => setManagingTeam(null)} wide>
+          <ManageTeamContent team={managingTeam} allUsers={users} topics={topics} onAddMember={addMemberToTeam} onRemoveMember={removeMemberFromTeam} onUpdateTopicTeam={onUpdateTopicTeam} />
         </Modal>
       )}
     </div>

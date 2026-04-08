@@ -35,10 +35,8 @@ export const RecentNotifications: React.FC<RecentNotificationsProps> = ({
 
         const subscribedTopicIds = new Set(safeTopics.filter(t => t.subscribed).map(t => t.id));
 
-        // Filter out incomplete notifications
         let notifs = safeNotifications.filter(n => 
-            n.title && // Ensure there is a title
-            (!n.topic_id || subscribedTopicIds.has(n.topic_id))
+            !n.topic_id || subscribedTopicIds.has(n.topic_id)
         );
 
         if (severityFilter !== 'all') {
