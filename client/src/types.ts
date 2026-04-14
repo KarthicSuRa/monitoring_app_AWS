@@ -124,6 +124,7 @@ export interface PingLog {
   status_code: number;
   status_text: string;
   checked_at: string;
+  checked_at_iso: string;
 }
 
 export interface Incident {

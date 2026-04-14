@@ -1,3 +1,4 @@
+// public/firebase-messaging-sw.js
 importScripts('https://www.gstatic.com/firebasejs/12.11.0/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/12.11.0/firebase-messaging-compat.js');
 
@@ -12,60 +13,70 @@ firebase.initializeApp({
 
 const messaging = firebase.messaging();
 
-messaging.onBackgroundMessage(function(payload) {
-  console.log('[SW] Received background message:', payload);
+messaging.onBackgroundMessage((payload) => {
+  console.log('[SW] Payload received:', payload);
 
-  // Extract content from either 'notification' object or 'data' object
-  const notificationTitle = payload.notification?.title || payload.data?.title || 'MCM Alert';
-  const notificationOptions = {
-    body: payload.notification?.body || payload.data?.message || 'New system update.',
-    icon: '/icons/icon-192x192.png',
-    badge: '/icons/icon-192x192.png',
-    tag: 'mcm-notification', // Replaces old notification with new one
-    data: payload.data
-  };
-
-  // Forward the background push to any open app clients so it appears in the in-app toast list
-  clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function(clientList) {
-    for (const client of clientList) {
-      if (client.url.startsWith(self.location.origin)) {
-        client.postMessage({ 
-          type: 'PUSH_NOTIFICATION', 
-          notification: {
-            id: payload.messageId || `bg-${Date.now()}`,
-            title: notificationTitle,
-            message: notificationOptions.body,
-            severity: payload.data?.severity || 'high',
-            type: 'push',
-            timestamp: new Date().toISOString(),
-            topic_id: payload.data?.topic_id || null,
-            status: 'new'
-          }
-        });
+  // Relay to app when user comes back to the tab
+  self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(clients => {
+    clients.forEach(client => client.postMessage({
+      type: 'PUSH_NOTIFICATION',
+      notification: {
+        id: payload.data?.id || `push-${Date.now()}`,
+        title: payload.data?.title || 'MCM Alert',
+        message: payload.data?.message || '',
+        severity: payload.data?.severity || 'high',
+        type: 'push',
+        timestamp: new Date().toISOString(),
+        site: null,
+        comments: [],
+        topic_id: payload.data?.topic_id || null,
+        status: 'new',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
       }
-    }
+    }));
   });
 
-  return self.registration.showNotification(notificationTitle, notificationOptions);
+  const title = payload.data?.title || "MCM Alert";
+  const body = payload.data?.message || "New update received";
+
+  const notificationOptions = {
+    body: body,
+    icon: payload.data?.icon || '/icons/icon-192x192.png',
+    badge: '/icons/icon-192x192.png',
+    tag: `mcm-${Date.now()}`,
+    renotify: true,
+    requireInteraction: true,  // stays until user dismisses
+    vibrate: [200, 100, 200],  // explicit vibration pattern
+    sound: 'default',
+    data: {
+      url: payload.data?.click_action || '/'
+    },
+    actions: [
+      { action: 'open', title: 'View Dashboard' }
+    ]
+  };
+
+  return self.registration.showNotification(title, notificationOptions);
 });
 
-// Open (or focus) the app when the user clicks a push notification
-self.addEventListener('notificationclick', function(event) {
+// 4. Handle notification clicks (Teams style)
+self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-
-  const targetUrl = event.notification.data?.click_action || '/';
+  const urlToOpen = event.notification.data.url;
 
   event.waitUntil(
-    clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function(clientList) {
-      // If a window is already open, focus it
-      for (const client of clientList) {
-        if (client.url.startsWith(self.location.origin) && 'focus' in client) {
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windowClients) => {
+      // If a tab is already open, focus it
+      for (let i = 0; i < windowClients.length; i++) {
+        const client = windowClients[i];
+        if (client.url === urlToOpen && 'focus' in client) {
           return client.focus();
         }
       }
-      // Otherwise open a new window
+      // Otherwise, open a new one
       if (clients.openWindow) {
-        return clients.openWindow(targetUrl);
+        return clients.openWindow(urlToOpen);
       }
     })
   );

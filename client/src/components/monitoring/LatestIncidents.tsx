@@ -3,10 +3,13 @@ import { Card, Title, Badge } from '@tremor/react';
 import { Incident } from '../../types';
 import { formatDistanceToNow } from '../../lib/utils';
 import { Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow } from '@tremor/react';
+import { parseISO, isValid } from 'date-fns';
 
 interface LatestIncidentsProps {
     incidents: Incident[];
 }
+
+const MIN_VALID_YEAR = 2000;
 
 export const LatestIncidents: React.FC<LatestIncidentsProps> = ({ incidents }) => {
     return (
@@ -22,18 +25,30 @@ export const LatestIncidents: React.FC<LatestIncidentsProps> = ({ incidents }) =
                     </TableRow>
                 </TableHead>
                 <TableBody>
-                    {incidents.map((incident, index) => (
-                        <TableRow key={index}>
-                            <TableCell>{incident.reason}</TableCell>
-                            <TableCell>{formatDistanceToNow(new Date(incident.started_at))}</TableCell>
-                            <TableCell>{incident.duration_human}</TableCell>
-                            <TableCell>
-                                <Badge color={incident.is_resolved ? 'green' : 'red'}>
-                                    {incident.is_resolved ? 'Resolved' : 'Ongoing'}
-                                </Badge>
-                            </TableCell>
-                        </TableRow>
-                    ))}
+                    {incidents.map((incident, index) => {
+                        console.log('incident.started_at raw value:', JSON.stringify(incident.started_at));
+                        let startedAt: string;
+                        const parsed = incident.started_at ? parseISO(incident.started_at) : null;
+
+                        if (parsed && isValid(parsed) && parsed.getFullYear() >= MIN_VALID_YEAR) {
+                            startedAt = formatDistanceToNow(parsed);
+                        } else {
+                            startedAt = 'Unknown';
+                        }
+
+                        return (
+                            <TableRow key={index}>
+                                <TableCell>{incident.reason}</TableCell>
+                                <TableCell>{startedAt}</TableCell>
+                                <TableCell>{incident.duration_human}</TableCell>
+                                <TableCell>
+                                    <Badge color={incident.is_resolved ? 'green' : 'red'}>
+                                        {incident.is_resolved ? 'Resolved' : 'Ongoing'}
+                                    </Badge>
+                                </TableCell>
+                            </TableRow>
+                        );
+                    })}
                 </TableBody>
             </Table>
         </Card>

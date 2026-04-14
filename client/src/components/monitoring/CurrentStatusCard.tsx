@@ -3,6 +3,7 @@ import { Card, Flex, Text, Metric } from '@tremor/react';
 import { MonitoredSite } from '../../types';
 import { cn } from '../../lib/utils';
 import { formatDateTime } from '../../lib/formatters';
+import { parseISO, isValid } from 'date-fns';
 
 interface CurrentStatusCardProps {
     site: MonitoredSite;
@@ -13,6 +14,14 @@ export const CurrentStatusCard: React.FC<CurrentStatusCardProps> = ({ site }) =>
     const latency = site.latest_ping?.response_time_ms ?? 0;
     const statusText = isUp ? 'Online' : 'Offline';
     const statusColor = isUp ? 'bg-green-500' : 'bg-red-500';
+
+    let checkedAt: string;
+    const parsed = site.latest_ping?.checked_at ? parseISO(site.latest_ping.checked_at) : null;
+    if (parsed && isValid(parsed)) {
+        checkedAt = formatDateTime(parsed.toISOString());
+    } else {
+        checkedAt = 'No data';
+    }
 
     return (
         <Card>
@@ -25,7 +34,7 @@ export const CurrentStatusCard: React.FC<CurrentStatusCardProps> = ({ site }) =>
             </Flex>
              <div className="mt-4">
                 <span className={cn("inline-block w-3 h-3 rounded-full", statusColor)}></span>
-                <Text className="ml-2">{formatDateTime(site.latest_ping?.checked_at)}</Text>
+                <Text className="ml-2">{checkedAt}</Text>
             </div>
         </Card>
     );

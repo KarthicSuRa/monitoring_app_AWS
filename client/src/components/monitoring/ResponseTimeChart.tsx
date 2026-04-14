@@ -29,7 +29,7 @@ const customTooltip = (props: any) => {
 export const ResponseTimeChart: React.FC<ResponseTimeChartProps> = ({ pings }) => {
 
     const chartData = pings.slice(0, 100).map(ping => ({
-        time: formatDateTime(ping.checked_at),
+        time: formatDateTime(ping.checked_at_iso),
         'Response Time (ms)': ping.response_time_ms,
     })).reverse();
 

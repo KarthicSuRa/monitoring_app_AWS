@@ -11,13 +11,13 @@ const calculateIncidents = (pings: PingLog[]): Incident[] => {
     for (const ping of chronologicalPings) {
         if (!ping.is_up && !currentIncident) {
             currentIncident = {
-                started_at: ping.checked_at,
+                started_at: ping.checked_at_iso,
                 reason: ping.status_text || 'Service Unavailable',
                 is_resolved: false,
             };
         } else if (ping.is_up && currentIncident && currentIncident.started_at) {
             const startTime = new Date(currentIncident.started_at).getTime();
-            const endTime = new Date(ping.checked_at).getTime();
+            const endTime = new Date(ping.checked_at_iso).getTime();
             const durationMs = endTime - startTime;
             
             const seconds = Math.floor(durationMs / 1000);

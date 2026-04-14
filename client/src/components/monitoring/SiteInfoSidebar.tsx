@@ -4,10 +4,13 @@ import { MonitoredSite } from '../../types';
 import { CountryToEmoji } from '../../components/CountryToEmoji';
 import { formatDate, formatDateTime } from '../../lib/formatters';
 import { GlobeAltIcon, CalendarIcon, ClockIcon, ShieldCheckIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
+import { parseISO, isValid } from 'date-fns';
 
 interface SiteInfoSidebarProps {
   site: MonitoredSite;
 }
+
+const MIN_VALID_YEAR = 2000;
 
 export const SiteInfoSidebar: React.FC<SiteInfoSidebarProps> = ({ site }) => {
 
@@ -21,6 +24,30 @@ export const SiteInfoSidebar: React.FC<SiteInfoSidebarProps> = ({ site }) => {
     </div>
   );
 
+  let lastCheckedAt: string;
+  const parsedLastCheckedAt = site.latest_ping?.checked_at ? parseISO(site.latest_ping.checked_at) : null;
+  if (parsedLastCheckedAt && isValid(parsedLastCheckedAt) && parsedLastCheckedAt.getFullYear() >= MIN_VALID_YEAR) {
+    lastCheckedAt = formatDateTime(parsedLastCheckedAt.toISOString());
+  } else {
+    lastCheckedAt = 'No data';
+  }
+
+  let createdAt: string;
+  const parsedCreatedAt = site.created_at ? parseISO(site.created_at) : null;
+  if (parsedCreatedAt && isValid(parsedCreatedAt) && parsedCreatedAt.getFullYear() >= MIN_VALID_YEAR) {
+    createdAt = formatDate(parsedCreatedAt.toISOString());
+  } else {
+    createdAt = 'No data';
+  }
+
+  let sslExpiry: string;
+  const parsedSslExpiry = site.ssl_info?.valid_to ? parseISO(site.ssl_info.valid_to) : null;
+  if (parsedSslExpiry && isValid(parsedSslExpiry) && parsedSslExpiry.getFullYear() >= MIN_VALID_YEAR) {
+    sslExpiry = formatDate(parsedSslExpiry.toISOString());
+  } else {
+    sslExpiry = 'No data';
+  }
+
   return (
     <Card className="p-4">
       <div className="space-y-6">
@@ -32,12 +59,12 @@ export const SiteInfoSidebar: React.FC<SiteInfoSidebarProps> = ({ site }) => {
         <DetailItem 
           icon={ClockIcon} 
           label="Last Checked"
-          value={formatDateTime(site.latest_ping?.checked_at)}
+          value={lastCheckedAt}
         />
         <DetailItem 
           icon={CalendarIcon} 
           label="Created"
-          value={formatDate(site.created_at)}
+          value={createdAt}
         />
 
         {site.ssl_info && (
@@ -51,7 +78,7 @@ export const SiteInfoSidebar: React.FC<SiteInfoSidebarProps> = ({ site }) => {
                 <DetailItem 
                     icon={CalendarIcon} 
                     label="Expires"
-                    value={formatDate(site.ssl_info.valid_to)}
+                    value={sslExpiry}
                 />
                 <DetailItem 
                     icon={ShieldCheckIcon} 

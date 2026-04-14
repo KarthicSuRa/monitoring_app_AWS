@@ -1,418 +1,235 @@
 
-import React, { useState } from 'react';
-import { Header } from '../components/layout/Header';
-import { Notification, SystemStatusData, User } from '../types';
-
-// --- Type Definitions ---
-interface IconProps {
-  name: string;
-  className?: string;
-}
-
-interface OrderSubHeaderProps {
-  orderId: string;
-  status: string;
-  store: string;
-  placedDate: string;
-}
-
-interface Stage {
-  name: string;
-  source: string;
-  date: string;
-  time: string;
-  status: 'completed' | 'active' | 'pending';
-  icon: string;
-}
-
-interface TimelineProps {
-  stages: Stage[];
-}
-
-interface TabsProps {
-  activeTab: string;
-  setActiveTab: (tab: string) => void;
-}
-
-interface LineItem {
-  sku: string;
-  product: string;
-  img: string;
-  qty: number;
-  price: number;
-  total: number;
-  loc: string;
-  status: string;
-}
-
-interface LineItemsTableProps {
-  shipments: LineItem[];
-  unfulfilled: LineItem[];
-}
-
-interface FinancialsProps {
-  paymentStatus: string;
-  processor: string;
-  method: string;
-  total: string;
-}
-
-interface Log {
-  title: string;
-  date: string;
-  description: string;
-  icon: string;
-}
-
-interface CommunicationsLogProps {
-  logs: Log[];
-}
-
-
-// --- Helper Components ---
-
-const Icon: React.FC<IconProps> = ({ name, className = '' }) => (
-    <span className={`material-symbols-outlined ${className}`}>{name}</span>
-);
-
-const OrderSubHeader: React.FC<OrderSubHeaderProps> = ({ orderId, status, store, placedDate }) => (
-    <div className="px-6 py-4">
-        <div className="flex items-center gap-3">
-            <h2 className="text-2xl font-bold text-gray-900">{orderId}</h2>
-            <span className="bg-blue-100 text-blue-600 text-xs font-bold px-2 py-0.5 rounded-full flex items-center gap-1">
-                <span className="w-2 h-2 bg-blue-500 rounded-full"></span>
-                {status}
-            </span>
-        </div>
-        <div className="flex items-center gap-4 text-sm text-gray-500 mt-1">
-            <div className="flex items-center gap-1.5">
-                <Icon name="store" className="text-sm" />
-                <span>{store}</span>
-            </div>
-            <div className="flex items-center gap-1.5">
-                <Icon name="calendar_today" className="text-sm" />
-                <span>Placed: {placedDate}</span>
-            </div>
-        </div>
-    </div>
-);
-
-const Timeline: React.FC<TimelineProps> = ({ stages }) => {
-    const activeIndex = stages.findIndex(s => s.status === 'active');
-    
-    return (
-        <div className="px-10 py-8">
-            <div className="relative flex justify-between items-start">
-                {/* Progress Bar */}
-                <div className="absolute top-5 left-0 w-full h-1 bg-gray-200">
-                    <div 
-                        className="h-full bg-blue-500" 
-                        style={{ width: `${(activeIndex / (stages.length - 1)) * 100}%` }}
-                    ></div>
-                </div>
-
-                {stages.map((stage, index) => {
-                    const isCompleted = stage.status === 'completed';
-                    const isActive = stage.status === 'active';
-                    const isPending = stage.status === 'pending';
-                    
-                    return (
-                        <div key={index} className="z-10 flex flex-col items-center text-center w-28">
-                            <div className={`w-10 h-10 rounded-full flex items-center justify-center border-4 ${isActive ? 'bg-blue-500 border-white shadow-lg' : isCompleted ? 'bg-blue-500 border-blue-500' : 'bg-white border-gray-300'}`}>
-                                <Icon name={stage.icon} className={isPending ? 'text-gray-400' : 'text-white'} />
-                            </div>
-                            <h3 className="text-xs font-bold mt-3">{stage.name}</h3>
-                            <p className={`text-xs ${isActive ? 'text-blue-600 font-semibold' : 'text-gray-500'}`}>{stage.source}</p>
-                            <p className="text-xs text-gray-500 mt-1">{stage.date}</p>
-                            <p className="text-xs text-gray-500">{stage.time}</p>
-                        </div>
-                    );
-                })}
-            </div>
-        </div>
-    );
-};
-
-const Tabs: React.FC<TabsProps> = ({ activeTab, setActiveTab }) => (
-    <div className="border-b border-gray-200 px-6">
-        <nav className="-mb-px flex space-x-6">
-            <button 
-                onClick={() => setActiveTab('line-items')}
-                className={`py-3 px-1 border-b-2 font-semibold text-sm ${activeTab === 'line-items' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}`}
-            >
-                Line Items
-            </button>
-            <button 
-                onClick={() => setActiveTab('inventory-status')}
-                className={`py-3 px-1 border-b-2 font-semibold text-sm ${activeTab === 'inventory-status' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}`}
-            >
-                Inventory Status
-            </button>
-        </nav>
-    </div>
-);
-
-const LineItemsTable: React.FC<LineItemsTableProps> = ({ shipments, unfulfilled }) => (
-    <div className="p-6 space-y-6">
-        {/* Shipment 1 */}
-        <div className="bg-white rounded-lg border border-gray-200">
-            <div className="px-4 py-3 border-b border-gray-200">
-                <div className="flex justify-between items-center">
-                    <h3 className="font-semibold text-sm flex items-center gap-2">
-                        <span className="w-2.5 h-2.5 bg-green-500 rounded-full"></span>
-                        SHIPMENT 1 - FEDEX EXPRESS
-                    </h3>
-                    <div className="text-sm text-gray-600 bg-gray-50 border border-gray-200 rounded-md px-2 py-1">
-                        Tracking: <span className="font-mono text-gray-800">1Z999AA1012391</span>
-                    </div>
-                </div>
-            </div>
-            <table className="w-full text-sm">
-                <thead className="text-left text-gray-500">
-                    <tr>
-                        <th className="px-4 py-2 font-medium">SKU</th>
-                        <th className="px-4 py-2 font-medium" colSpan={2}>PRODUCT</th>
-                        <th className="px-4 py-2 font-medium text-right">QTY</th>
-                        <th className="px-4 py-2 font-medium text-right">UNIT PRICE</th>
-                        <th className="px-4 py-2 font-medium text-right">TOTAL</th>
-                        <th className="px-4 py-2 font-medium text-center">LOC</th>
-                        <th className="px-4 py-2 font-medium text-center">STATUS</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {shipments.map((item, i) => (
-                        <tr key={i} className="border-t border-gray-200">
-                            <td className="px-4 py-3 font-mono">{item.sku}</td>
-                            <td className="px-4 py-3" colSpan={2}>
-                                <div className="flex items-center gap-3">
-                                    <img src={item.img} alt={item.product} className="w-10 h-10 rounded-md border border-gray-200 object-cover" />
-                                    <span>{item.product}</span>
-                                </div>
-                            </td>
-                            <td className="px-4 py-3 text-right">{item.qty}</td>
-                            <td className="px-4 py-3 text-right font-mono">${item.price.toFixed(2)}</td>
-                            <td className="px-4 py-3 text-right font-semibold font-mono">${item.total.toFixed(2)}</td>
-                            <td className="px-4 py-3 text-center font-mono">{item.loc}</td>
-                            <td className="px-4 py-3 text-center">
-                                <span className="bg-green-100 text-green-700 font-semibold text-xs px-2 py-1 rounded-full">{item.status}</span>
-                            </td>
-                        </tr>
-                    ))}
-                </tbody>
-            </table>
-        </div>
-
-        {/* Unfulfilled */}
-        <div className="bg-white rounded-lg border border-gray-200">
-            <div className="px-4 py-3 border-b border-gray-200">
-                <h3 className="font-semibold text-sm flex items-center gap-2">
-                    <span className="w-2.5 h-2.5 bg-yellow-500 rounded-full"></span>
-                    UNFULFILLED - WAREHOUSE 2
-                </h3>
-            </div>
-             <table className="w-full text-sm">
-                <thead className="text-left text-gray-500 sr-only">
-                    <tr>
-                        <th className="px-4 py-2 font-medium">SKU</th>
-                        <th className="px-4 py-2 font-medium" colSpan={2}>PRODUCT</th>
-                        <th className="px-4 py-2 font-medium text-right">QTY</th>
-                        <th className="px-4 py-2 font-medium text-right">UNIT PRICE</th>
-                        <th className="px-4 py-2 font-medium text-right">TOTAL</th>
-                        <th className="px-4 py-2 font-medium text-center">LOC</th>
-                        <th className="px-4 py-2 font-medium text-center">STATUS</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {unfulfilled.map((item, i) => (
-                        <tr key={i}>
-                            <td className="px-4 py-3 font-mono">{item.sku}</td>
-                            <td className="px-4 py-3" colSpan={2}>
-                                <div className="flex items-center gap-3">
-                                    <img src={item.img} alt={item.product} className="w-10 h-10 rounded-md border border-gray-200 object-cover" />
-                                    <span>{item.product}</span>
-                                </div>
-                            </td>
-                            <td className="px-4 py-3 text-right">{item.qty}</td>
-                            <td className="px-4 py-3 text-right font-mono">${item.price.toFixed(2)}</td>
-                            <td className="px-4 py-3 text-right font-semibold font-mono">${item.total.toFixed(2)}</td>
-                            <td className="px-4 py-3 text-center font-mono">{item.loc}</td>
-                            <td className="px-4 py-3 text-center">
-                                <span className="bg-yellow-100 text-yellow-700 font-semibold text-xs px-2 py-1 rounded-full">{item.status}</span>
-                            </td>
-                        </tr>
-                    ))}
-                </tbody>
-            </table>
-        </div>
-    </div>
-);
-
-const Financials: React.FC<FinancialsProps> = ({ paymentStatus, processor, method, total }) => (
-    <div className="bg-white border border-gray-200 rounded-lg">
-        <h3 className="px-4 py-3 font-semibold text-sm text-gray-800 border-b border-gray-200 flex items-center gap-2">
-            <Icon name="receipt_long" className="text-gray-500 text-base" />
-            FINANCIALS
-        </h3>
-        <div className="p-4 space-y-3 text-sm">
-            <div className="flex justify-between items-center">
-                <span className="text-gray-600">Payment Status</span>
-                <span className="bg-green-100 text-green-700 font-bold text-xs px-2 py-0.5 rounded-full flex items-center gap-1.5">
-                    <Icon name="check_circle" className="text-sm" />
-                    {paymentStatus}
-                </span>
-            </div>
-            <div className="flex justify-between items-center">
-                <span className="text-gray-600">Payment Processor</span>
-                <div className="flex items-center gap-2">
-                    <img src="https://upload.wikimedia.org/wikipedia/commons/b/ba/Stripe_Logo%2C_revised_2016.svg" alt="Stripe" className="h-4" />
-                    <span className="font-semibold text-gray-800">{processor}</span>
-                </div>
-            </div>
-            <div className="flex justify-between items-center">
-                <span className="text-gray-600">Payment Method</span>
-                <div className="flex items-center gap-2">
-                    <Icon name="credit_card" />
-                    <span className="font-mono text-gray-800">{method}</span>
-                </div>
-            </div>
-        </div>
-        <div className="px-4 py-3 border-t border-gray-200 bg-gray-50 flex justify-between items-center">
-            <span className="font-semibold text-gray-800">Total Amount</span>
-            <span className="text-xl font-bold text-gray-900 font-mono">${total}</span>
-        </div>
-    </div>
-);
-
-const CommunicationsLog: React.FC<CommunicationsLogProps> = ({ logs }) => (
-    <div className="bg-white border border-gray-200 rounded-lg">
-        <h3 className="px-4 py-3 font-semibold text-sm text-gray-800 border-b border-gray-200 flex items-center gap-2">
-            <Icon name="forum" className="text-gray-500 text-base" />
-            COMMUNICATIONS LOG
-        </h3>
-        <div className="p-4 space-y-4">
-            {logs.map((log, i) => (
-                <div key={i} className="flex gap-3">
-                    <Icon name={log.icon} className="text-blue-500 mt-0.5" />
-                    <div>
-                        <div className="flex justify-between items-baseline">
-                            <p className="font-semibold text-sm text-gray-800">{log.title}</p>
-                            <p className="text-xs text-gray-500 font-mono">{log.date}</p>
-                        </div>
-                        <p className="text-sm text-gray-600">{log.description}</p>
-                    </div>
-                </div>
-            ))}
-        </div>
-    </div>
-);
+import React from 'react';
+import { User } from '../types';
+import ParcelsAppWidget from '../components/tracking/ParcelsAppWidget';
 
 interface OrderTrackingPageProps {
-  notifications: Notification[];
-  onNavigate: (page: string) => void;
-  onLogout: () => Promise<void>;
-  isSidebarOpen: boolean;
-  setIsSidebarOpen: (open: boolean) => void;
-  openSettings: () => void;
-  systemStatus: SystemStatusData;
   user: User | null;
 }
 
-const OrderTrackingPage: React.FC<OrderTrackingPageProps> = ({ 
-    notifications, 
-    onNavigate, 
-    onLogout, 
-    isSidebarOpen, 
-    setIsSidebarOpen, 
-    openSettings, 
-    systemStatus, 
-    user 
-}) => {
-    const [activeTab, setActiveTab] = useState('line-items');
+const OrderTrackingPage: React.FC<OrderTrackingPageProps> = ({ user }) => {
+  const trackingNumber = "00340434197561734496";
 
-    const orderData: OrderSubHeaderProps = {
-        orderId: '#J123564780',
-        status: 'IN TRANSIT',
-        store: 'US-Main Store',
-        placedDate: 'Oct 24, 2023, 14:30',
-    };
-
-    const timelineStages: Stage[] = [
-        { name: 'ORDER PLACED', source: 'SFCC', date: 'Oct 24', time: '14:38', status: 'completed', icon: 'shopping_bag' },
-        { name: 'PROCESSING', source: 'SOM', date: 'Oct 24', time: '16:45', status: 'completed', icon: 'settings' },
-        { name: 'FULFILLMENT', source: 'Warehouse', date: 'Oct 25', time: '09:15', status: 'completed', icon: 'warehouse' },
-        { name: 'IN TRANSIT', source: 'Shipment', date: 'Oct 25', time: '18:00', status: 'active', icon: 'local_shipping' },
-        { name: 'DELIVERY', source: 'Arrived', date: 'Est. Oct 27', time: '10:30', status: 'pending', icon: 'package' },
-        { name: 'COMPLETION', source: 'Archived', date: '—', time: '', status: 'pending', icon: 'archive' }
-    ];
-
-    const shippedItems: LineItem[] = [
-        { sku: 'SKU-99281', product: 'Neon Running Shoes', img: 'https://i.imgur.com/62g2V32.png', qty: 1, price: 120.00, total: 120.00, loc: 'NY-A12', status: 'Shipped' },
-        { sku: 'SKU-11029', product: 'Performance Socks', img: 'https://i.imgur.com/5h2SoiW.png', qty: 2, price: 15.00, total: 30.00, loc: 'NY-B04', status: 'Shipped' },
-    ];
-    
-    const unfulfilledItems: LineItem[] = [
-        { sku: 'SKU-88392', product: 'Insulated Water Bottle - Matte Black', img: 'https://i.imgur.com/K6b2n8t.png', qty: 1, price: 25.00, total: 25.00, loc: 'CA-C01', status: 'Processing' },
-    ];
-
-    const financialData: FinancialsProps = {
-        paymentStatus: 'PAID',
-        processor: 'Stripe',
-        method: 'Visa •••• 4242',
-        total: '175.00',
-    };
-
-    const communicationLogs: Log[] = [
-        { title: 'Order Confirmation', date: 'Oct 24, 14:35', description: 'Sent to customer email (j.doe@example.com).', icon: 'email' },
-        { title: 'Shipping Update', date: 'Oct 25, 09:12', description: 'Tracking number sent via SMS and Email.', icon: 'sms' },
-    ];
-    
-    return (
-        <>
-            <Header 
-                onNavigate={onNavigate} 
-                onLogout={onLogout} 
-                notifications={notifications} 
-                isSidebarOpen={isSidebarOpen} 
-                setIsSidebarOpen={setIsSidebarOpen} 
-                openSettings={openSettings} 
-                systemStatus={systemStatus} 
-                profile={user} 
-                title="Order Tracker"
-            />
-            <main className="flex-1 overflow-y-auto bg-background md:ml-72">
-                <div className="max-w-screen-2xl mx-auto p-4 sm:p-6 lg:p-8">
-                    <div className="bg-white rounded-xl border border-gray-200/80 shadow-sm mb-6 p-4 flex items-center gap-4">
-                        <div className="relative w-full">
-                            <Icon name="search" className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-                            <input 
-                                type="text" 
-                                placeholder="Search by Order ID, tracking number, or SKU..." 
-                                className="bg-gray-100 border border-gray-300 rounded-md pl-10 pr-4 py-2 text-sm w-full focus:ring-blue-500 focus:border-blue-500"
-                            />
-                        </div>
-                        <button className="bg-blue-600 text-white px-6 py-2 rounded-md text-sm font-semibold hover:bg-blue-700">Track</button>
+  return (
+    <div className="min-h-screen bg-[#F8F9FA] font-sans text-slate-800 md:ml-72">
+      
+      {/* GLOBAL TOP NAVIGATION (Adapted from your design) */}
+      <div className="bg-white border-b border-slate-200 px-6 py-3 flex justify-between items-center mb-6">
+        <div className="flex items-center space-x-2">
+          <span className="font-bold text-lg text-slate-800 tracking-tight">Order Details <span className="font-normal text-slate-400 mx-2">/</span> D10505564</span>
+        </div>
+        <div className="flex items-center space-x-6 text-sm font-medium text-slate-600">
+          <div className="flex items-center space-x-2">
+            <div className="w-2 h-2 rounded-full bg-green-500"></div>
+            <span>Operational</span>
+          </div>
+          <div className="flex items-center space-x-2 pl-2 border-l border-slate-200">
+             {user && user.full_name && (
+                <>
+                    <div className="w-7 h-7 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center font-bold text-xs">
+                        {user.full_name.charAt(0).toUpperCase()}
                     </div>
+                    <span className="font-semibold text-sm">{user.full_name.toUpperCase()}</span>
+                </>
+             )}
+          </div>
+        </div>
+      </div>
 
-                    <div className="bg-white rounded-xl border border-gray-200/80 shadow-sm mb-6">
-                        <OrderSubHeader {...orderData} />
-                        <Timeline stages={timelineStages} />
-                    </div>
+      {/* MAIN DASHBOARD CONTENT */}
+      <div className="px-6 pb-10 max-w-[1600px] mx-auto">
+        
+        {/* Header Action Row */}
+        <div className="mb-6 flex justify-between items-end">
+          <div>
+            <h1 className="text-2xl font-semibold text-slate-800">Order D10505564</h1>
+            <p className="text-sm text-slate-500 mt-1">Placed: April 5, 2026 • Channel: Web Store EU</p>
+          </div>
+          <div className="flex space-x-3 text-sm font-semibold">
+            <span className="px-3 py-1 rounded bg-yellow-400 text-slate-900 shadow-sm border border-yellow-500">
+              Exceptions Present
+            </span>
+            <span className="px-3 py-1 rounded bg-slate-100 text-slate-600 border border-slate-200">
+              SOM Ingested
+            </span>
+          </div>
+        </div>
 
-                    <div className="grid grid-cols-3 gap-6 items-start">
-                        <div className="col-span-3 lg:col-span-2 bg-gray-50/50 rounded-lg">
-                            <Tabs activeTab={activeTab} setActiveTab={setActiveTab} />
-                            {activeTab === 'line-items' && <LineItemsTable shipments={shippedItems} unfulfilled={unfulfilledItems} />}
-                            {activeTab === 'inventory-status' && <div className="p-6 text-gray-500">Inventory Status view not implemented yet.</div>}
-                        </div>
-                        <div className="col-span-3 lg:col-span-1 space-y-6">
-                        <Financials {...financialData} />
-                        <CommunicationsLog logs={communicationLogs} />
-                        </div>
-                    </div>
+        {/* BENTO GRID */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          
+          {/* LEFT COLUMN (Spans 2) */}
+          <div className="lg:col-span-2 space-y-6">
+            
+            {/* ROW 1: Details Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
+                <h2 className="text-[15px] font-semibold text-slate-800 mb-4">Financial Summary</h2>
+                <div className="space-y-3 text-sm">
+                  <div className="flex justify-between border-b border-slate-100 pb-2">
+                    <span className="text-slate-500">Total Amount</span>
+                    <span className="font-medium text-slate-800">€240.00</span>
+                  </div>
+                  <div className="flex justify-between border-b border-slate-100 pb-2">
+                    <span className="text-slate-500">Captured Amount</span>
+                    <span className="font-semibold text-red-600">€0.00</span>
+                  </div>
+                  <div className="flex justify-between pt-1">
+                    <span className="text-slate-500">Method</span>
+                    <span className="font-medium text-slate-700">Klarna Pay later</span>
+                  </div>
                 </div>
-            </main>
-        </>
-    );
+              </div>
+
+              <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
+                <h2 className="text-[15px] font-semibold text-slate-800 mb-4">Warehouse Routing</h2>
+                <div className="space-y-3 text-sm">
+                  <div className="flex justify-between border-b border-slate-100 pb-2">
+                    <span className="text-slate-500">Location</span>
+                    <span className="font-medium text-slate-800">DE-INVENTORY-7020</span>
+                  </div>
+                  <div className="flex justify-between border-b border-slate-100 pb-2">
+                    <span className="text-slate-500">WMS ID</span>
+                    <span className="font-mono text-slate-600">FO-4980</span>
+                  </div>
+                  <div className="flex justify-between pt-1">
+                    <span className="text-slate-500">Properties</span>
+                    <span className="font-medium text-slate-600">isWarehouse, GWP</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* ROW 2: Order Items */}
+            <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
+              <h2 className="text-[15px] font-semibold text-slate-800 mb-4">Order Items</h2>
+              <table className="w-full text-left text-sm">
+                <thead>
+                  <tr className="border-b border-slate-200 text-slate-500">
+                    <th className="pb-3 font-medium">SKU</th>
+                    <th className="pb-3 font-medium">Product Name</th>
+                    <th className="pb-3 font-medium text-center">Qty</th>
+                    <th className="pb-3 font-medium text-right">Line Total</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  <tr>
+                    <td className="py-3 font-mono text-xs text-blue-600">TSHIRT-BIO-WHT</td>
+                    <td className="py-3 font-medium text-slate-700">T-Shirt aus Bio-Baumwolle (Monogramm)</td>
+                    <td className="py-3 text-center text-slate-600">1</td>
+                    <td className="py-3 text-right text-slate-800">€201.68</td>
+                  </tr>
+                  <tr>
+                    <td className="py-3 font-mono text-xs text-blue-600">SHIP-NORMAL</td>
+                    <td className="py-3 font-medium text-slate-700">Standard Shipping</td>
+                    <td className="py-3 text-center text-slate-600">1</td>
+                    <td className="py-3 text-right text-slate-800">€0.00</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            {/* ROW 3: Shipment Details & Tracking */}
+            <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h2 className="text-[15px] font-semibold text-slate-800">Shipment Details</h2>
+                  <p className="text-sm text-slate-500 mt-1">SP-3888 • 1 Carton</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-1">DHL Tracking</p>
+                  <a href="#" className="font-mono font-medium text-blue-600 hover:text-blue-800 text-base">
+                    {trackingNumber}
+                  </a>
+                </div>
+              </div>
+              <ParcelsAppWidget trackingNumber={trackingNumber} />
+            </div>
+
+          </div>
+
+          {/* RIGHT COLUMN */}
+          <div className="space-y-6">
+            
+            {/* Exceptions Component */}
+            <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
+              <h2 className="text-[15px] font-semibold text-slate-800 mb-4">Order Investigation</h2>
+              
+              <div className="space-y-4">
+                {/* Exception 1 */}
+                <div className="border border-slate-200 rounded-lg p-4 bg-white shadow-sm">
+                  <div className="flex justify-between items-start mb-2">
+                    <span className="font-semibold text-slate-800 text-sm">Payment Collection</span>
+                    <div className="text-right">
+                      <span className="font-semibold text-slate-800 text-sm">2d 14h</span>
+                      <p className="text-xs text-slate-500">4/7/2026</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center space-x-2 mb-2">
+                    <div className="w-2 h-2 rounded-full bg-red-500"></div>
+                    <span className="text-sm font-medium text-slate-700">Failed Capture</span>
+                  </div>
+                  <p className="text-sm text-red-600 font-medium mb-4">Reason: Klarna Gateway Rejected</p>
+                  
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-medium text-green-600 bg-green-50 px-2 py-1 rounded">Acknowledged</span>
+                    <div className="space-x-2">
+                      <button className="text-xs font-medium bg-slate-100 text-slate-600 px-3 py-1.5 rounded hover:bg-slate-200">Assign</button>
+                      <button className="text-xs font-medium bg-green-600 text-white px-3 py-1.5 rounded hover:bg-green-700 shadow-sm">Resolve</button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Exception 2 */}
+                <div className="border border-slate-200 rounded-lg p-4 bg-white shadow-sm">
+                  <div className="flex justify-between items-start mb-2">
+                    <span className="font-semibold text-slate-800 text-sm">Active Return</span>
+                    <div className="text-right">
+                      <span className="font-semibold text-slate-800 text-sm">RO-0382</span>
+                      <p className="text-xs text-slate-500">4/10/2026</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center space-x-2 mb-2">
+                    <div className="w-2 h-2 rounded-full bg-blue-500"></div>
+                    <span className="text-sm font-medium text-slate-700">Return Processing</span>
+                  </div>
+                  <p className="text-sm text-slate-600 mb-4">Reason: Customer initiated return</p>
+                  
+                  <div className="flex justify-end space-x-2">
+                    <button className="text-xs font-medium bg-slate-100 text-slate-600 px-3 py-1.5 rounded hover:bg-slate-200">Comment</button>
+                    <button className="text-xs font-medium bg-green-600 text-white px-3 py-1.5 rounded hover:bg-green-700 shadow-sm">Process</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Simple Timeline */}
+            <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
+              <h2 className="text-[15px] font-semibold text-slate-800 mb-4">Event History</h2>
+              <div className="relative pl-4 space-y-6 border-l-2 border-slate-100 ml-2">
+                <div className="relative">
+                  <div className="absolute -left-[21px] top-1 w-2.5 h-2.5 rounded-full bg-blue-400 border-2 border-white"></div>
+                  <p className="text-sm font-medium text-slate-800">Return Created</p>
+                  <p className="text-xs text-slate-500">Apr 10, 08:17 AM</p>
+                </div>
+                <div className="relative">
+                  <div className="absolute -left-[21px] top-1 w-2.5 h-2.5 rounded-full bg-red-500 border-2 border-white"></div>
+                  <p className="text-sm font-medium text-red-600">Payment Error</p>
+                  <p className="text-xs text-slate-500">Apr 7, 08:36 AM</p>
+                </div>
+                <div className="relative">
+                  <div className="absolute -left-[21px] top-1 w-2.5 h-2.5 rounded-full bg-green-500 border-2 border-white"></div>
+                  <p className="text-sm font-medium text-slate-800">Shipped (SP-3888)</p>
+                  <p className="text-xs text-slate-500">Apr 7, 08:35 AM</p>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 };
 
 export default OrderTrackingPage;
