@@ -96,12 +96,17 @@ export class InfrastructureStack extends cdk.Stack {
 
     const fcmPlatformApplicationArn = 'arn:aws:sns:ap-southeast-2:867958227307:app/GCM/testfcm';
 
-    // --- S3 & OAC: Create the S3 bucket (now fully private) ---
+    // --- S3 Bucket: Create with environment-specific names ---
+    const bucketName = environment === 'prod'
+        ? 'ecommonitoring.mcmworldwide.com'
+        : `ecommonitoring-${environment}.mcmworldwide.com`;
+
     const frontendBucket = new s3.Bucket(this, 'McmAlertsFrontendBucket', {
-      removalPolicy: cdk.RemovalPolicy.DESTROY,
-      autoDeleteObjects: true,
+      bucketName: bucketName,
+      removalPolicy: cdk.RemovalPolicy.DESTROY, // For production, consider cdk.RemovalPolicy.RETAIN
+      autoDeleteObjects: true, // For production, set this to false
       publicReadAccess: false,
-      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL, // This is the modern, secure setting
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
     });
 
     // --- OAC: Create the Origin Access Control ---

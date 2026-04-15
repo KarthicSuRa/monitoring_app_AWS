@@ -1,0 +1,56 @@
+# bitbucket-pipelines.yml
+# This pipeline automates the build and deployment of the ecom-monitor application to AWS.
+# It uses OIDC for secure, keyless authentication.
+
+image: node:20 # Use a recent, stable Node.js version
+
+pipelines:
+  branches:
+    main: # Defines the deployment process for the 'main' branch (Production)
+      - step:
+          name: Build and Deploy to Production
+          deployment: production # Identifies this step as a production deployment
+          # Enable OpenID Connect for secure authentication with AWS
+          oidc: true
+          caches:
+            - node
+          script:
+            # 1. Configure AWS Credentials using OIDC
+            # The AWS_ROLE_ARN is the IAM Role you created for Bitbucket.
+            - export AWS_ROLE_ARN="arn:aws:iam::867958227307:role/Bitbucket-CDK-Deploy-Role"
+            - export AWS_DEFAULT_REGION="ap-southeast-2" # Your target AWS region
+
+            # 2. Install Project Dependencies
+            - npm install
+
+            # 3. Build the Frontend Application
+            # The CDK needs the client assets in 'client/dist' to deploy to S3.
+            - npm run build --workspace=client
+
+            # 4. Deploy the CDK Stack to Production
+            # --context environment=prod passes the environment name to the CDK stack.
+            # --require-approval never is required for automated pipeline deployments.
+            - npm run deploy -- --context environment=prod --require-approval never
+
+    dev: # Defines the deployment process for the 'dev' branch
+      - step:
+          name: Build and Deploy to Dev
+          deployment: development # Identifies this step as a development deployment
+          # Enable OpenID Connect for secure authentication with AWS
+          oidc: true
+          caches:
+            - node
+          script:
+            # 1. Configure AWS Credentials using OIDC
+            - export AWS_ROLE_ARN="arn:aws:iam::867958227307:role/Bitbucket-CDK-Deploy-Role"
+            - export AWS_DEFAULT_REGION="ap-southeast-2"
+
+            # 2. Install Project Dependencies
+            - npm install
+
+            # 3. Build the Frontend Application
+            - npm run build --workspace=client
+
+            # 4. Deploy the CDK Stack to Dev
+            # --context environment=dev passes the environment name to the CDK stack.
+            - npm run deploy -- --context environment=dev --require-approval never
